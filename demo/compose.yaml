@@ -1,0 +1,32 @@
+x-workload: &workload
+  image: busybox:1.37.0
+  command: ["sh", "-c", "while :; do sleep 3600; done"]
+  network_mode: none
+  read_only: true
+  user: "65534:65534"
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  cpus: 0.1
+  mem_limit: 32m
+  pids_limit: 16
+  restart: "no"
+
+services:
+  healthy:
+    <<: *workload
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 1s
+      timeout: 1s
+      retries: 1
+  unhealthy:
+    <<: *workload
+    healthcheck:
+      test: ["CMD", "false"]
+      interval: 1s
+      timeout: 1s
+      retries: 1
+  no-healthcheck:
+    <<: *workload
+    healthcheck:
+      disable: true
