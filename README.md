@@ -2,7 +2,7 @@
 
 Aegis inspects one explicitly selected Docker container and can save the result to
 SQLite. It reports lifecycle and application health separately, reads saved
-history without Docker, and takes no recovery action.
+history without Docker, and can monitor one target periodically. It takes no recovery action.
 The [project contract](AEGIS_PROJECT_GOAL.md) describes later work, not implemented features.
 
 ## Build and inspect a container
@@ -49,9 +49,9 @@ Action: none — inspection only.
 Successful output goes to stdout. Operational errors and argument errors go to stderr.
 Exit codes are:
 
-- `0`: inspection succeeded, including `unhealthy`, `starting`, and `unknown` health. Requested saving also succeeded. History, including empty history, and help exit `0`.
-- `1`: inspection, saving, history access, connection configuration, or output failed.
-- `2`: invalid command or arguments, including an invalid selector, database path, or history limit.
+- `0`: inspection and any requested saving succeeded. Unhealthy or unknown health does not change this. Read-only queries, including empty results, help, and normal monitor shutdown also exit `0`.
+- `1`: inspection, persistence, history access, connection configuration, monitor locking, or output failed.
+- `2`: invalid command or arguments, including an invalid selector, path, limit, interval, or retention duration.
 
 Use the reported health to assess the application. The exit code reports whether
 inspection worked. A missing container or failed Docker request is an unavailable
@@ -95,7 +95,7 @@ check commands, or log output. Each explicit save inserts a row, even when the
 health-check timestamp repeats. These rows do not represent independent checks
 and are not failure streaks.
 
-The initial schema migration and first insert commit together. Schema version 1
+The initial schema migration and first insert commit together. Schema version 2
 uses `PRAGMA user_version`, a DELETE rollback journal, `synchronous=FULL`, a
 one-second busy timeout, and parameterized queries. Each database operation has
 a five-second context deadline, separate from the Docker request deadline.
@@ -113,6 +113,63 @@ The pinned `github.com/mattn/go-sqlite3` driver bundles SQLite and uses Go's
 standard `database/sql` API. You do not need a separate SQLite server or library.
 Builds need CGO and a C compiler; cross-compilation needs a matching C toolchain.
 
+Collection failures have a separate history, queried by the exact requested
+target rather than a guessed Docker ID:
+
+```sh
+./bin/aegis errors --container my-app --limit 20 --db data/aegis.db
+```
+
+The errors command opens SQLite read-only and requires no Docker connection.
+Version 1 databases remain readable without migration; the next write upgrades
+them to version 2 atomically. Older Aegis binaries reject the newer schema.
+
+## Monitor one container
+
+```sh
+./bin/aegis monitor --container my-app --interval 5s --retention 168h --db data/aegis.db
+```
+
+Monitoring inspects immediately, saves the result, then waits the interval after
+completion before trying again. Only one inspection runs at a time; missed time
+does not accumulate. Docker collection failures go to the separate errors history
+and monitoring continues at the same cadence. Any persistence failure stops it.
+Ctrl+C and SIGTERM cancel outstanding work and exit successfully.
+
+The default interval is five seconds. Both interval and retention accept positive
+Go durations such as `200ms`, `5s`, or `168h`; `7d` is not a supported duration.
+Each Docker request, including negotiation, has a five-second deadline. Each
+SQLite operation has a separate five-second deadline and a one-second lock wait.
+Shutdown cancels pending collection or storage and does not record user
+cancellation as an application failure. Only committed records survive.
+
+With a name selector, every cycle resolves the name again. If a replacement takes
+that name, its actual Docker ID starts a separate successful-observation history.
+With an ID selector, a removed container produces collection errors until that
+same target is available again. Aegis never switches an ID selector to another ID.
+Error history uses the exact requested selector, including any leading slash,
+and can span name reuse. Errors carry no fabricated container ID or health status.
+The categories are `not_found`, `unavailable`, `permission_denied`, `timeout`,
+`invalid_response`, `canceled`, and `request_failed`. Explanations are Aegis-authored
+and at most 256 characters; Docker error payloads are never persisted.
+
+Only one monitor can use a data directory at a time, including different database
+filenames in that directory. A Linux advisory file lock is acquired before
+migrations or writes and released by the kernel when the process exits or crashes.
+The `.aegis-monitor.lock` file remains; its existence does not mean a monitor is
+running. Do not unlink it while a monitor is active. Read-only history and errors
+commands remain available while monitoring runs.
+
+Retention defaults to seven days (`168h`) and must be positive. After the first
+collection, then at most once per minute after a completed cycle, the monitor
+deletes at most 500 expired observations and 500 expired collection errors in one
+transaction. Expiration uses observation or collection time, never health-check
+time. Rows exactly at the cutoff and future-dated rows remain. A large backlog
+can take multiple batches to clear; the duration is not a strict disk-size cap.
+Retention applies across all container IDs and targets in the selected database.
+No action, incident, or recovery-budget table is pruned. Deletion makes SQLite
+pages reusable but may not shrink the file; monitoring never runs `VACUUM`.
+
 ## Run automated checks
 
 These checks need no Docker daemon:
@@ -120,6 +177,7 @@ These checks need no Docker daemon:
 ```sh
 test -z "$(gofmt -l cmd internal)"
 go test ./...
+go test -race ./...
 go vet ./...
 CGO_ENABLED=1 go build -o bin/aegis ./cmd/aegis
 ```
@@ -130,6 +188,31 @@ expected read-only requests and check that secret fixture values stay out of out
 Persistence tests use real temporary SQLite files, including close/reopen,
 rollback, schema versions, ordering, and lock contention. They need a C compiler
 and CGO enabled. They do not require a real Docker daemon.
+Scheduling and retention tests use explicit times and a small wait-function seam.
+Fake Docker endpoints test cancellation, timeouts, missing containers, and daemon
+unavailability without stopping your Docker daemon. A child-process test verifies
+that an abrupt kill releases the data-directory lock.
+
+## Run the monitoring demonstration
+
+```sh
+bash scripts/smoke-monitor.sh
+```
+
+This live Docker demonstration starts a uniquely named sandbox and a real Aegis
+process. Another process reads its history, a host marker switches the sandbox
+health check from healthy to unhealthy, and Aegis stops through SIGTERM with exit
+`0`. The script restarts Aegis against the same SQLite file and checks that old
+records remain while new ones are added. Cleanup stops its monitor, removes only
+its Compose project, and deletes its private temporary files.
+
+The script places its temporary directory under ignored `data/` because Docker
+Desktop may not share `/tmp`. Docker Desktop must allow bind mounts from this
+project. The marker is a synthetic demo control, not a real application liveness
+probe. Aegis itself makes only read-only Docker requests.
+
+For interactive commands and scoped cleanup, follow the
+[manual monitoring demonstration](demo/README.md).
 
 ## Run the isolated demo
 
@@ -185,8 +268,8 @@ The observation remains available after container removal. In the same shell:
 DOCKER_HOST=invalid-Docker-host ./bin/aegis history --container "$container_id" --limit 20 --db data/demo-observations.db
 ```
 
-The manual demo database remains in `data/demo-observations.db`. There is no
-automatic retention or database cleanup in this feature.
+The manual demo database remains in `data/demo-observations.db`. One-off saves do
+not prune history. A monitor applies its configured retention to its database.
 
 ## Inspection semantics and limits
 
@@ -213,8 +296,8 @@ lifecycle and explains that it does not establish current availability.
 
 Inspection is a snapshot. State can change immediately afterward. Aegis displays
 age but applies no freshness threshold and runs no independent application probe.
-Saved history records earlier observations, not current health. Aegis runs no
-monitoring loop and implements no recovery.
+Saved history records earlier observations, not current health. Monitoring saves
+these snapshots periodically and implements no recovery.
 
 Aegis displays only allowlisted metadata and its own explanations. It does not
 print environment variables, health-check commands, check output, full inspection

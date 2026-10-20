@@ -20,10 +20,24 @@ const (
 	DefaultPath   = "data/aegis.db"
 	DefaultLimit  = 20
 	MaxLimit      = 1000
-	schemaVersion = 1
+	schemaVersion = 2
 	// Fixed-width UTC text sorts chronologically, including fractional seconds.
 	timestampLayout = "2006-01-02T15:04:05.000000000Z"
 )
+
+const schemaV2 = `
+CREATE TABLE collection_errors (
+    sequence INTEGER PRIMARY KEY,
+    target TEXT NOT NULL,
+    collected_at TEXT NOT NULL,
+    category TEXT NOT NULL,
+    explanation TEXT NOT NULL CHECK(length(explanation) <= 256)
+);
+CREATE INDEX collection_errors_history ON collection_errors(target, collected_at DESC, sequence DESC);
+CREATE INDEX collection_errors_retention ON collection_errors(collected_at, sequence);
+CREATE INDEX observations_retention ON observations(observed_at, sequence);
+PRAGMA user_version = 2;
+`
 
 const schemaV1 = `
 CREATE TABLE observations (
@@ -62,6 +76,22 @@ func Save(ctx context.Context, path string, result inspection.Result, observedAt
 	if !inspection.ValidID(result.ID) || !inspection.ValidSelector(result.Name) || observedAt.IsZero() {
 		return errors.New("invalid observation identity or timestamp")
 	}
+	return write(ctx, path, func(ctx context.Context, tx *sql.Tx) error {
+		var checkTime any
+		if !result.CheckTime.IsZero() {
+			checkTime = result.CheckTime.UTC().Format(timestampLayout)
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO observations
+        (container_id, container_name, observed_at, lifecycle, health, check_time)
+        VALUES (?, ?, ?, ?, ?, ?)`, result.ID, result.Name, observedAt.UTC().Format(timestampLayout), result.Lifecycle, result.Health, checkTime)
+		if err != nil {
+			return fmt.Errorf("insert observation: %w", err)
+		}
+		return nil
+	})
+}
+
+func write(ctx context.Context, path string, operation func(context.Context, *sql.Tx) error) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	db, err := open(path, false)
@@ -78,7 +108,7 @@ func Save(ctx context.Context, path string, result inspection.Result, observedAt
 	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fmt.Errorf("read SQLite schema version: %w", err)
 	}
-	if version != 0 && version != schemaVersion {
+	if version < 0 || version > schemaVersion {
 		return versionError(version)
 	}
 	// Set this only after checking the version, so newer databases stay untouched.
@@ -94,18 +124,16 @@ func Save(ctx context.Context, path string, result inspection.Result, observedAt
 			return fmt.Errorf("initialize SQLite schema: %w", err)
 		}
 	}
-	var checkTime any
-	if !result.CheckTime.IsZero() {
-		checkTime = result.CheckTime.UTC().Format(timestampLayout)
+	if version < 2 {
+		if _, err := tx.ExecContext(ctx, schemaV2); err != nil {
+			return fmt.Errorf("migrate SQLite collection errors: %w", err)
+		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO observations
-        (container_id, container_name, observed_at, lifecycle, health, check_time)
-        VALUES (?, ?, ?, ?, ?, ?)`, result.ID, result.Name, observedAt.UTC().Format(timestampLayout), result.Lifecycle, result.Health, checkTime)
-	if err != nil {
-		return fmt.Errorf("insert observation: %w", err)
+	if err := operation(ctx, tx); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit observation: %w", err)
+		return fmt.Errorf("commit observation history: %w", err)
 	}
 	return nil
 }
@@ -129,7 +157,7 @@ func History(ctx context.Context, path, containerID string, limit int) ([]Observ
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return nil, fmt.Errorf("read SQLite schema version: %w", err)
 	}
-	if version != schemaVersion {
+	if version < 1 || version > schemaVersion {
 		return nil, versionError(version)
 	}
 	rows, err := db.QueryContext(ctx, `SELECT container_id, container_name, observed_at, lifecycle, health, check_time

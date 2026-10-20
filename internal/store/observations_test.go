@@ -65,7 +65,7 @@ func TestSaveAndReopen(t *testing.T) {
 			db := readSQL(t, path)
 			var version, nullChecks int
 			var observed, journal string
-			if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 1 {
+			if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 2 {
 				t.Fatalf("version=%d err=%v", version, err)
 			}
 			if err := db.QueryRow("PRAGMA journal_mode").Scan(&journal); err != nil || journal != "delete" {
@@ -194,7 +194,7 @@ func TestMissingDatabaseAndReadOnly(t *testing.T) {
 }
 
 func TestSchemaVersionsDoNotModifyDatabase(t *testing.T) {
-	for _, version := range []int{0, 2} {
+	for _, version := range []int{0, 3} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "version.db")
 			db, err := open(path, false)
@@ -202,8 +202,8 @@ func TestSchemaVersionsDoNotModifyDatabase(t *testing.T) {
 				t.Fatal(err)
 			}
 			statement := "CREATE TABLE sentinel (value TEXT); INSERT INTO sentinel VALUES ('keep');"
-			if version == 2 {
-				statement += "PRAGMA user_version=2;"
+			if version == 3 {
+				statement += "PRAGMA user_version=3;"
 			}
 			if _, err := db.Exec(statement); err != nil {
 				t.Fatal(err)
@@ -216,8 +216,8 @@ func TestSchemaVersionsDoNotModifyDatabase(t *testing.T) {
 			if _, err := History(context.Background(), path, result("unknown").ID, 20); err == nil || !strings.Contains(err.Error(), "schema version") {
 				t.Fatalf("history error=%v", err)
 			}
-			if version == 2 {
-				if err := Save(context.Background(), path, result("unknown"), testTime); err == nil || !strings.Contains(err.Error(), "schema version 2") {
+			if version == 3 {
+				if err := Save(context.Background(), path, result("unknown"), testTime); err == nil || !strings.Contains(err.Error(), "schema version 3") {
 					t.Fatalf("save error=%v", err)
 				}
 			}

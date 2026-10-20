@@ -216,7 +216,7 @@ func TestNewerSchemaCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("CREATE TABLE sentinel (value TEXT); PRAGMA user_version=2;"); err != nil {
+	if _, err := db.Exec("CREATE TABLE sentinel (value TEXT); PRAGMA user_version=3;"); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -227,7 +227,7 @@ func TestNewerSchemaCommands(t *testing.T) {
 	inspectionAPI(t, "healthy", 200)
 	for _, args := range [][]string{{"history", "--container", historyID, "--db", path}, {"inspect", "--container", "demo", "--save", "--db", path}} {
 		var out, errOut bytes.Buffer
-		if code := run(context.Background(), args, &out, &errOut); code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), "schema version 2") {
+		if code := run(context.Background(), args, &out, &errOut); code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), "schema version 3") {
 			t.Fatalf("code=%d out=%q err=%q", code, out.String(), errOut.String())
 		}
 	}

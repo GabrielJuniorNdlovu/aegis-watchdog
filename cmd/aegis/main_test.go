@@ -36,7 +36,7 @@ func TestArgumentsBeforeDocker(t *testing.T) {
 			t.Fatalf("args %q: code=%d stdout=%q stderr=%q", args, code, out.String(), errOut.String())
 		}
 	}
-	for _, args := range [][]string{{"--help"}, {"inspect", "--help"}, {"history", "--help"}} {
+	for _, args := range [][]string{{"--help"}, {"inspect", "--help"}, {"history", "--help"}, {"errors", "--help"}, {"monitor", "--help"}} {
 		var out, errOut bytes.Buffer
 		if code := run(context.Background(), args, &out, &errOut); code != 0 || !strings.Contains(out.String(), "Usage:") || errOut.Len() != 0 {
 			t.Fatalf("help code=%d out=%q err=%q", code, out.String(), errOut.String())
