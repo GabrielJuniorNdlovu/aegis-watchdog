@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	github.com/containerd/errdefs v1.0.0
+	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/moby/moby/client v0.6.2
 )
 

@@ -26,6 +26,11 @@ func ValidSelector(selector string) bool {
 	return selectorPattern.MatchString(selector)
 }
 
+// ValidID requires the full, resolved Docker container ID.
+func ValidID(id string) bool {
+	return idPattern.MatchString(id)
+}
+
 // Result contains only metadata safe to display. Docker health is independent
 // of lifecycle; a stopped container may retain an earlier health result.
 type Result struct {
@@ -49,7 +54,7 @@ func Inspect(ctx context.Context, docker *client.Client, selector string) (Resul
 	}
 	container := response.Container
 	invalid := errors.New("Docker returned an invalid or incomplete container inspection")
-	if !idPattern.MatchString(container.ID) || !ValidSelector(container.Name) || container.State == nil || container.Config == nil {
+	if !ValidID(container.ID) || !ValidSelector(container.Name) || container.State == nil || container.Config == nil {
 		return Result{}, invalid
 	}
 	state := container.State
