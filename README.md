@@ -2,7 +2,7 @@
 
 Aegis inspects one explicitly selected Docker container and can save the result to
 SQLite. It reports lifecycle and application health separately, reads saved
-history without Docker, and takes no recovery action.
+history without Docker, and can monitor one target periodically. It takes no recovery action.
 The [project contract](AEGIS_PROJECT_GOAL.md) describes later work, not implemented features.
 
 ## Build and inspect a container
@@ -124,6 +124,25 @@ The errors command opens SQLite read-only and requires no Docker connection.
 Version 1 databases remain readable without migration; the next write upgrades
 them to version 2 atomically. Older Aegis binaries reject the newer schema.
 
+## Monitor one container
+
+```sh
+./bin/aegis monitor --container my-app --interval 5s --db data/aegis.db
+```
+
+Monitoring inspects immediately, saves the result, then waits the interval after
+completion before trying again. Only one inspection runs at a time; missed time
+does not accumulate. Docker collection failures go to the separate errors history
+and monitoring continues at the same cadence. Any persistence failure stops it.
+Ctrl+C and SIGTERM cancel outstanding work and exit successfully.
+
+Only one monitor can use a data directory at a time, including different database
+filenames in that directory. A Linux advisory file lock is acquired before
+migrations or writes and released by the kernel when the process exits or crashes.
+The `.aegis-monitor.lock` file remains; its existence does not mean a monitor is
+running. Do not unlink it while a monitor is active. Read-only history and errors
+commands remain available while monitoring runs.
+
 ## Run automated checks
 
 These checks need no Docker daemon:
@@ -224,8 +243,8 @@ lifecycle and explains that it does not establish current availability.
 
 Inspection is a snapshot. State can change immediately afterward. Aegis displays
 age but applies no freshness threshold and runs no independent application probe.
-Saved history records earlier observations, not current health. Aegis runs no
-monitoring loop and implements no recovery.
+Saved history records earlier observations, not current health. Monitoring saves
+these snapshots periodically and implements no recovery.
 
 Aegis displays only allowlisted metadata and its own explanations. It does not
 print environment variables, health-check commands, check output, full inspection

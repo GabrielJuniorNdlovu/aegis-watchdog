@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/monitor"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 	"github.com/moby/moby/client"
 )
@@ -20,7 +21,8 @@ import (
 const usage = "Usage:\n" +
 	"  aegis inspect --container <name-or-id> [--save] [--db <path>]\n" +
 	"  aegis history --container <full-docker-id> [--limit <1-1000>] [--db <path>]\n" +
-	"  aegis errors --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n"
+	"  aegis errors --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n" +
+	"  aegis monitor --container <name-or-id> [--interval <duration>] [--db <path>]\n"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -34,7 +36,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
-	if len(args) == 0 || (args[0] != "inspect" && args[0] != "history" && args[0] != "errors") {
+	if len(args) == 0 || (args[0] != "inspect" && args[0] != "history" && args[0] != "errors" && args[0] != "monitor") {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -44,9 +46,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var selector string
 	var save bool
 	limit := store.DefaultLimit
+	interval := monitor.DefaultInterval
 	path := flags.String("db", store.DefaultPath, "SQLite file path; used by history or inspect --save")
 	if args[0] == "inspect" {
 		flags.BoolVar(&save, "save", false, "save the successful inspection to SQLite")
+	} else if args[0] == "monitor" {
+		flags.DurationVar(&interval, "interval", monitor.DefaultInterval, "wait after each completed collection (must be positive)")
 	} else {
 		flags.IntVar(&limit, "limit", store.DefaultLimit, "maximum observations to show (1-1000)")
 	}
@@ -87,12 +92,26 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return history(ctx, *path, selector, limit, stdout, stderr)
 	}
+	config := monitor.Config{Target: selector, DBPath: *path, Interval: interval}
+	if args[0] == "monitor" {
+		if err := config.Validate(); err != nil {
+			fmt.Fprintln(stderr, "aegis:", err)
+			return 2
+		}
+	}
 	docker, err := client.New(client.FromEnv)
 	if err != nil {
 		fmt.Fprintln(stderr, "aegis: invalid Docker connection configuration; check Docker environment settings")
 		return 1
 	}
 	defer docker.Close()
+	if args[0] == "monitor" {
+		if err := monitor.Run(ctx, docker, config, stdout, stderr); err != nil {
+			fmt.Fprintln(stderr, "aegis:", err)
+			return 1
+		}
+		return 0
+	}
 	inspectCtx, cancel := context.WithTimeout(ctx, inspection.Timeout)
 	defer cancel()
 	result, err := inspection.Inspect(inspectCtx, docker, selector)
