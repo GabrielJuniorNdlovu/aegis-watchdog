@@ -57,4 +57,15 @@ for pair in healthy:healthy unhealthy:unhealthy no-healthcheck:unknown; do
     grep -Fxq 'Last completed health check: unavailable' <<<"$output"
   fi
   printf 'PASS: %s reports %s with exit 0\n' "$service" "$expected"
+
+  saved=$("$temp_dir/aegis" inspect --container "$container_id" --save --db "$temp_dir/observations.db")
+  grep -Fxq "Health: $expected" <<<"$saved"
+  grep -q '^Saved observation at: ' <<<"$saved"
+  # A new process reads durable history without a usable Docker connection.
+  history=$(DOCKER_HOST=invalid-Docker-host "$temp_dir/aegis" history --container "$container_id" --limit 20 --db "$temp_dir/observations.db")
+  grep -Fxq "History for Docker ID: $container_id" <<<"$history"
+  grep -Fxq 'Saved observations (historical; not current health):' <<<"$history"
+  grep -Fxq "Health: $expected" <<<"$history"
+  [[ $(grep -c '^Observed at: ' <<<"$history") == 1 ]]
+  printf 'PASS: %s observation survives process exit; history needs no Docker\n' "$service"
 done
