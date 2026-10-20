@@ -49,9 +49,9 @@ Action: none — inspection only.
 Successful output goes to stdout. Operational errors and argument errors go to stderr.
 Exit codes are:
 
-- `0`: inspection succeeded, including `unhealthy`, `starting`, and `unknown` health. Requested saving also succeeded. History, including empty history, and help exit `0`.
-- `1`: inspection, saving, history access, connection configuration, or output failed.
-- `2`: invalid command or arguments, including an invalid selector, database path, or history limit.
+- `0`: inspection and any requested saving succeeded. Unhealthy or unknown health does not change this. Read-only queries, including empty results, help, and normal monitor shutdown also exit `0`.
+- `1`: inspection, persistence, history access, connection configuration, monitor locking, or output failed.
+- `2`: invalid command or arguments, including an invalid selector, path, limit, interval, or retention duration.
 
 Use the reported health to assess the application. The exit code reports whether
 inspection worked. A missing container or failed Docker request is an unavailable
@@ -136,6 +136,23 @@ does not accumulate. Docker collection failures go to the separate errors histor
 and monitoring continues at the same cadence. Any persistence failure stops it.
 Ctrl+C and SIGTERM cancel outstanding work and exit successfully.
 
+The default interval is five seconds. Both interval and retention accept positive
+Go durations such as `200ms`, `5s`, or `168h`; `7d` is not a supported duration.
+Each Docker request, including negotiation, has a five-second deadline. Each
+SQLite operation has a separate five-second deadline and a one-second lock wait.
+Shutdown cancels pending collection or storage and does not record user
+cancellation as an application failure. Only committed records survive.
+
+With a name selector, every cycle resolves the name again. If a replacement takes
+that name, its actual Docker ID starts a separate successful-observation history.
+With an ID selector, a removed container produces collection errors until that
+same target is available again. Aegis never switches an ID selector to another ID.
+Error history uses the exact requested selector, including any leading slash,
+and can span name reuse. Errors carry no fabricated container ID or health status.
+The categories are `not_found`, `unavailable`, `permission_denied`, `timeout`,
+`invalid_response`, `canceled`, and `request_failed`. Explanations are Aegis-authored
+and at most 256 characters; Docker error payloads are never persisted.
+
 Only one monitor can use a data directory at a time, including different database
 filenames in that directory. A Linux advisory file lock is acquired before
 migrations or writes and released by the kernel when the process exits or crashes.
@@ -160,6 +177,7 @@ These checks need no Docker daemon:
 ```sh
 test -z "$(gofmt -l cmd internal)"
 go test ./...
+go test -race ./...
 go vet ./...
 CGO_ENABLED=1 go build -o bin/aegis ./cmd/aegis
 ```
@@ -170,6 +188,31 @@ expected read-only requests and check that secret fixture values stay out of out
 Persistence tests use real temporary SQLite files, including close/reopen,
 rollback, schema versions, ordering, and lock contention. They need a C compiler
 and CGO enabled. They do not require a real Docker daemon.
+Scheduling and retention tests use explicit times and a small wait-function seam.
+Fake Docker endpoints test cancellation, timeouts, missing containers, and daemon
+unavailability without stopping your Docker daemon. A child-process test verifies
+that an abrupt kill releases the data-directory lock.
+
+## Run the monitoring demonstration
+
+```sh
+bash scripts/smoke-monitor.sh
+```
+
+This live Docker demonstration starts a uniquely named sandbox and a real Aegis
+process. Another process reads its history, a host marker switches the sandbox
+health check from healthy to unhealthy, and Aegis stops through SIGTERM with exit
+`0`. The script restarts Aegis against the same SQLite file and checks that old
+records remain while new ones are added. Cleanup stops its monitor, removes only
+its Compose project, and deletes its private temporary files.
+
+The script places its temporary directory under ignored `data/` because Docker
+Desktop may not share `/tmp`. Docker Desktop must allow bind mounts from this
+project. The marker is a synthetic demo control, not a real application liveness
+probe. Aegis itself makes only read-only Docker requests.
+
+For interactive commands and scoped cleanup, follow the
+[manual monitoring demonstration](demo/README.md).
 
 ## Run the isolated demo
 

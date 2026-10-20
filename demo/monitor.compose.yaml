@@ -1,0 +1,10 @@
+# Use with compose.yaml; the host marker controls only this demo health check.
+services:
+  healthy:
+    volumes:
+      - type: bind
+        source: ${AEGIS_DEMO_CONTROL_DIR:?Set AEGIS_DEMO_CONTROL_DIR to the demo control directory}
+        target: /control
+        read_only: true
+    healthcheck:
+      test: ["CMD", "test", "-f", "/control/healthy"]
