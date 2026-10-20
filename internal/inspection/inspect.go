@@ -3,8 +3,10 @@ package inspection
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -53,7 +55,7 @@ func Inspect(ctx context.Context, docker *client.Client, selector string) (Resul
 		return Result{}, requestError(ctx, err)
 	}
 	container := response.Container
-	invalid := errors.New("Docker returned an invalid or incomplete container inspection")
+	invalid := &collectionError{"invalid_response", "Docker returned an invalid or incomplete container inspection"}
 	if !ValidID(container.ID) || !ValidSelector(container.Name) || container.State == nil || container.Config == nil {
 		return Result{}, invalid
 	}
@@ -109,21 +111,26 @@ func Inspect(ctx context.Context, docker *client.Client, selector string) (Resul
 // Do not include SDK error text: daemon messages and response bodies can contain
 // secrets. Error categories provide useful diagnostics without exposing them.
 func requestError(ctx context.Context, err error) error {
+	var syntax *json.SyntaxError
+	var value *json.UnmarshalTypeError
+	var timestamp *time.ParseError
 	switch {
 	case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, context.Canceled):
-		return errors.New("Docker inspection canceled")
+		return &collectionError{"canceled", "Docker inspection canceled"}
 	case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
-		return errors.New("Docker inspection timed out")
+		return &collectionError{"timeout", "Docker inspection timed out"}
 	case errors.Is(err, errdefs.ErrNotFound):
-		return errors.New("requested container was not found")
+		return &collectionError{"not_found", "requested container was not found"}
 	case errors.Is(err, errdefs.ErrPermissionDenied), errors.Is(err, errdefs.ErrUnauthenticated), errors.Is(err, os.ErrPermission),
 		// shortcut: the pinned SDK discards socket errno; remove message matching when it preserves typed permission errors.
 		client.IsErrConnectionFailed(err) && strings.HasPrefix(err.Error(), "permission denied while trying to connect to the docker API"):
-		return errors.New("Docker access denied; check socket permissions or Docker authentication")
+		return &collectionError{"permission_denied", "Docker access denied; check socket permissions or Docker authentication"}
 	case client.IsErrConnectionFailed(err):
-		return errors.New("Docker is unavailable; check that the daemon is running and the connection is configured")
+		return &collectionError{"unavailable", "Docker is unavailable; check that the daemon is running and the connection is configured"}
+	case errors.As(err, &syntax), errors.As(err, &value), errors.As(err, &timestamp), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return &collectionError{"invalid_response", "Docker inspection failed: invalid or incomplete response"}
 	default:
-		return errors.New("Docker inspection failed: invalid response or Docker API request failure; check daemon availability and API compatibility")
+		return &collectionError{"request_failed", "Docker inspection failed: invalid response or Docker API request failure; check daemon availability and API compatibility"}
 	}
 }
 

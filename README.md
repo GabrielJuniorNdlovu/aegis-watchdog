@@ -95,7 +95,7 @@ check commands, or log output. Each explicit save inserts a row, even when the
 health-check timestamp repeats. These rows do not represent independent checks
 and are not failure streaks.
 
-The initial schema migration and first insert commit together. Schema version 1
+The initial schema migration and first insert commit together. Schema version 2
 uses `PRAGMA user_version`, a DELETE rollback journal, `synchronous=FULL`, a
 one-second busy timeout, and parameterized queries. Each database operation has
 a five-second context deadline, separate from the Docker request deadline.
@@ -112,6 +112,17 @@ Runtime databases and SQLite sidecar files are ignored by Git.
 The pinned `github.com/mattn/go-sqlite3` driver bundles SQLite and uses Go's
 standard `database/sql` API. You do not need a separate SQLite server or library.
 Builds need CGO and a C compiler; cross-compilation needs a matching C toolchain.
+
+Collection failures have a separate history, queried by the exact requested
+target rather than a guessed Docker ID:
+
+```sh
+./bin/aegis errors --container my-app --limit 20 --db data/aegis.db
+```
+
+The errors command opens SQLite read-only and requires no Docker connection.
+Version 1 databases remain readable without migration; the next write upgrades
+them to version 2 atomically. Older Aegis binaries reject the newer schema.
 
 ## Run automated checks
 

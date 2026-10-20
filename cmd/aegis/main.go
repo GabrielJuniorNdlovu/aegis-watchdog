@@ -19,7 +19,8 @@ import (
 
 const usage = "Usage:\n" +
 	"  aegis inspect --container <name-or-id> [--save] [--db <path>]\n" +
-	"  aegis history --container <full-docker-id> [--limit <1-1000>] [--db <path>]\n"
+	"  aegis history --container <full-docker-id> [--limit <1-1000>] [--db <path>]\n" +
+	"  aegis errors --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -33,7 +34,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
-	if len(args) == 0 || (args[0] != "inspect" && args[0] != "history") {
+	if len(args) == 0 || (args[0] != "inspect" && args[0] != "history" && args[0] != "errors") {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -68,18 +69,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	if (save || args[0] == "history") && strings.TrimSpace(*path) == "" {
+	if (save || args[0] != "inspect") && strings.TrimSpace(*path) == "" {
 		fmt.Fprintln(stderr, "aegis: database path must not be empty")
 		return 2
 	}
-	if args[0] == "history" {
-		if !inspection.ValidID(selector) {
+	if args[0] == "history" || args[0] == "errors" {
+		if args[0] == "history" && !inspection.ValidID(selector) {
 			fmt.Fprintln(stderr, "aegis: history requires a full 64-character Docker ID")
 			return 2
 		}
 		if err := store.ValidateLimit(limit); err != nil {
 			fmt.Fprintln(stderr, "aegis:", err)
 			return 2
+		}
+		if args[0] == "errors" {
+			return errorHistory(ctx, *path, selector, limit, stdout, stderr)
 		}
 		return history(ctx, *path, selector, limit, stdout, stderr)
 	}
