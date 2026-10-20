@@ -22,7 +22,7 @@ const usage = "Usage:\n" +
 	"  aegis inspect --container <name-or-id> [--save] [--db <path>]\n" +
 	"  aegis history --container <full-docker-id> [--limit <1-1000>] [--db <path>]\n" +
 	"  aegis errors --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n" +
-	"  aegis monitor --container <name-or-id> [--interval <duration>] [--db <path>]\n"
+	"  aegis monitor --container <name-or-id> [--interval <duration>] [--retention <duration>] [--db <path>]\n"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -47,11 +47,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var save bool
 	limit := store.DefaultLimit
 	interval := monitor.DefaultInterval
-	path := flags.String("db", store.DefaultPath, "SQLite file path; used by history or inspect --save")
+	retention := monitor.DefaultRetention
+	path := flags.String("db", store.DefaultPath, "SQLite file path; used by monitor, history, errors, or inspect --save")
 	if args[0] == "inspect" {
 		flags.BoolVar(&save, "save", false, "save the successful inspection to SQLite")
 	} else if args[0] == "monitor" {
 		flags.DurationVar(&interval, "interval", monitor.DefaultInterval, "wait after each completed collection (must be positive)")
+		flags.DurationVar(&retention, "retention", monitor.DefaultRetention, "routine history retention (must be positive; default 168h)")
 	} else {
 		flags.IntVar(&limit, "limit", store.DefaultLimit, "maximum observations to show (1-1000)")
 	}
@@ -92,7 +94,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return history(ctx, *path, selector, limit, stdout, stderr)
 	}
-	config := monitor.Config{Target: selector, DBPath: *path, Interval: interval}
+	config := monitor.Config{Target: selector, DBPath: *path, Interval: interval, Retention: retention}
 	if args[0] == "monitor" {
 		if err := config.Validate(); err != nil {
 			fmt.Fprintln(stderr, "aegis:", err)

@@ -26,7 +26,7 @@ var id = strings.Repeat("a", 64)
 
 func config(t *testing.T) Config {
 	t.Helper()
-	return Config{Target: "demo", DBPath: filepath.Join(t.TempDir(), "history.db"), Interval: 5 * time.Second}
+	return Config{Target: "demo", DBPath: filepath.Join(t.TempDir(), "history.db"), Interval: 5 * time.Second, Retention: DefaultRetention}
 }
 
 func observation() inspection.Result {

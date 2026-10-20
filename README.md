@@ -127,7 +127,7 @@ them to version 2 atomically. Older Aegis binaries reject the newer schema.
 ## Monitor one container
 
 ```sh
-./bin/aegis monitor --container my-app --interval 5s --db data/aegis.db
+./bin/aegis monitor --container my-app --interval 5s --retention 168h --db data/aegis.db
 ```
 
 Monitoring inspects immediately, saves the result, then waits the interval after
@@ -142,6 +142,16 @@ migrations or writes and released by the kernel when the process exits or crashe
 The `.aegis-monitor.lock` file remains; its existence does not mean a monitor is
 running. Do not unlink it while a monitor is active. Read-only history and errors
 commands remain available while monitoring runs.
+
+Retention defaults to seven days (`168h`) and must be positive. After the first
+collection, then at most once per minute after a completed cycle, the monitor
+deletes at most 500 expired observations and 500 expired collection errors in one
+transaction. Expiration uses observation or collection time, never health-check
+time. Rows exactly at the cutoff and future-dated rows remain. A large backlog
+can take multiple batches to clear; the duration is not a strict disk-size cap.
+Retention applies across all container IDs and targets in the selected database.
+No action, incident, or recovery-budget table is pruned. Deletion makes SQLite
+pages reusable but may not shrink the file; monitoring never runs `VACUUM`.
 
 ## Run automated checks
 
@@ -215,8 +225,8 @@ The observation remains available after container removal. In the same shell:
 DOCKER_HOST=invalid-Docker-host ./bin/aegis history --container "$container_id" --limit 20 --db data/demo-observations.db
 ```
 
-The manual demo database remains in `data/demo-observations.db`. There is no
-automatic retention or database cleanup in this feature.
+The manual demo database remains in `data/demo-observations.db`. One-off saves do
+not prune history. A monitor applies its configured retention to its database.
 
 ## Inspection semantics and limits
 

@@ -14,12 +14,17 @@ import (
 	"github.com/moby/moby/client"
 )
 
-const DefaultInterval = 5 * time.Second
+const (
+	DefaultInterval  = 5 * time.Second
+	DefaultRetention = 7 * 24 * time.Hour
+	PruneInterval    = time.Minute
+)
 
 type Config struct {
-	Target   string
-	DBPath   string
-	Interval time.Duration
+	Target    string
+	DBPath    string
+	Interval  time.Duration
+	Retention time.Duration
 }
 
 func (c Config) Validate() error {
@@ -31,6 +36,9 @@ func (c Config) Validate() error {
 	}
 	if c.Interval <= 0 {
 		return errors.New("interval must be positive")
+	}
+	if c.Retention <= 0 {
+		return errors.New("retention must be positive")
 	}
 	return nil
 }
@@ -58,6 +66,7 @@ func loop(ctx context.Context, config Config, collect func(context.Context) (ins
 		return err
 	}
 	defer lock.Close()
+	var lastPrune time.Time
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -82,6 +91,13 @@ func loop(ctx context.Context, config Config, collect func(context.Context) (ins
 			if _, err := fmt.Fprintf(stdout, "Observed at: %s\n%s", at.Format(time.RFC3339Nano), result.Text(at)); err != nil {
 				return fmt.Errorf("write monitor output: %w", err)
 			}
+		}
+		pruneAt := now()
+		if lastPrune.IsZero() || pruneAt.Sub(lastPrune) >= PruneInterval {
+			if _, err := store.Prune(ctx, config.DBPath, pruneAt.Add(-config.Retention)); err != nil {
+				return persistenceError(ctx, fmt.Errorf("retention pruning failed: %w", err))
+			}
+			lastPrune = pruneAt
 		}
 		if err := wait(ctx, config.Interval); err != nil {
 			if ctx.Err() != nil {
