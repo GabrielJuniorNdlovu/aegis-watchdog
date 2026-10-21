@@ -99,7 +99,7 @@ Each explicit save inserts a row, even when the
 health-check timestamp repeats. These rows do not represent independent checks
 and are not failure streaks.
 
-The initial schema migration and first insert commit together. Schema version 5
+The initial schema migration and first insert commit together. Schema version 6
 uses `PRAGMA user_version`, a DELETE rollback journal, `synchronous=FULL`, a
 one-second busy timeout, and parameterized queries. Each database operation has
 a five-second context deadline, separate from the Docker request deadline.
@@ -125,8 +125,8 @@ target rather than a guessed Docker ID:
 ```
 
 The errors command opens SQLite read-only and requires no Docker connection.
-Versions 1 through 4 remain readable without migration; the next write upgrades
-them to version 5 atomically. Observations written before schema 3 have no
+Versions 1 through 5 remain readable without migration; the next write upgrades
+them to version 6 atomically. Observations written before schema 3 have no
 individual-check evidence and cannot establish an assessment streak. Older Aegis
 binaries reject the newer schema.
 
@@ -351,6 +351,71 @@ audit and budget history. Cleanup removes only its temporary files and processes
 It needs Go, CGO, and a C compiler, but no Docker daemon. It does not demonstrate
 recovery from a real dispatched restart. See the
 [reconciliation design note](docs/action-reconciliation-design.md).
+
+## Capture bounded incident evidence
+
+Feature 7 adds an internal collector for an existing reservation. Capture is
+exercised through tests and an isolated demonstration. The live monitor does not
+create reservations or capture logs automatically, and real recovery execution
+remains disabled. There is no public command for creating fake actions.
+
+```sh
+bash scripts/smoke-evidence.sh
+```
+
+This demo uses synthetic logs, a simulated reservation, and a disposable database.
+It cleans up its own resources automatically. For commands that keep the bundle
+available for inspection and then clean it up, see the
+[evidence demonstration](demo/EVIDENCE.md).
+
+Inspect an existing action and its recorded evidence without Docker:
+
+```sh
+./bin/aegis actions --id 1 --db data/aegis.db
+```
+
+Inspection shows capture status, start and end times, published location and size,
+truncation, issues, and retirement. It reports missing or invalid files without
+repairing them or printing logs. An action with no capture reports that fact.
+The command exits zero when inspection succeeds, including when the recorded
+capture failed or its file is unavailable. Invalid arguments exit 2; a failed
+journal query or output write exits 1.
+
+The version-1 JSON bundle contains only action and exact container identity,
+persisted assessment summaries and policies, selected lifecycle and health-check
+timestamps, redacted logs, and explicit limitations. It excludes environment
+variables, full Docker inspection responses, probe commands, and probe output.
+
+Defaults are a 10-second collection deadline, five-minute lookback, a 200-line
+Docker tail request, 64 KiB of log-stream reads including framing, a 512 KiB bundle,
+16 MiB total logical evidence-file storage, and seven-day retention. Inspection
+and error responses are separately capped at 1 MiB. Configuration validates
+serialization overhead and reserves room for a maximum-size temporary bundle.
+Logs are bounded while reading, and common credentials are redacted before disk.
+Pattern-based redaction cannot recognize every secret. Oversized or unfinished
+lines are omitted and reported, so diagnostic context can be incomplete.
+
+Evidence lives in `evidence/` beside the selected database, with directory mode
+`0700` and file mode `0600`. Internal action IDs generate filenames. Symlinks,
+unsafe permissions, and traversal references are rejected. The directory belongs
+to one Aegis database; use a separate directory for each database.
+
+SQLite schema 6 journals `pending` intent before collection. Atomic publication
+precedes `complete` or `partial` completion. Startup reconciles interrupted
+captures and records missing or invalid published files. One capture record per
+action prevents unlimited retries and silent replacement. A failed SQLite
+completion is returned as an error, even when the bundle was published.
+
+Retention uses capture start time and deletes only expired evidence for resolved
+actions, at most 32 captures per monitor cleanup pass. Unresolved actions remain
+protected. Deletion intent is committed before unlinking; a retired timestamp
+preserves the publication history afterward. Unknown files count toward storage
+and are never deleted. Protected storage exhaustion blocks another capture.
+Corrupt or unsafe replacement files require operator attention; cleanup refuses
+to delete them. Evidence does not change action outcomes or budget accounting.
+
+See the [evidence design note](docs/incident-evidence-design.md) for crash
+boundaries, query limits, publication details, and deadline limitations.
 
 ## Run automated checks
 
