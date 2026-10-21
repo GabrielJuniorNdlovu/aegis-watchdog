@@ -11,7 +11,7 @@ import (
 const PruneBatch = 500
 
 // Prune removes at most 500 rows from each routine-history table, strictly before
-// the cutoff. Reservations, coverage, and clock metadata are never pruned.
+// the cutoff. Reservations, action audit, coverage, and clock metadata are never pruned.
 func Prune(ctx context.Context, path string, cutoff time.Time) (int64, error) {
 	if cutoff.IsZero() {
 		return 0, errors.New("retention cutoff must not be zero")

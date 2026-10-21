@@ -99,7 +99,7 @@ Each explicit save inserts a row, even when the
 health-check timestamp repeats. These rows do not represent independent checks
 and are not failure streaks.
 
-The initial schema migration and first insert commit together. Schema version 4
+The initial schema migration and first insert commit together. Schema version 5
 uses `PRAGMA user_version`, a DELETE rollback journal, `synchronous=FULL`, a
 one-second busy timeout, and parameterized queries. Each database operation has
 a five-second context deadline, separate from the Docker request deadline.
@@ -125,10 +125,10 @@ target rather than a guessed Docker ID:
 ```
 
 The errors command opens SQLite read-only and requires no Docker connection.
-Version 1, 2, and 3 databases remain readable without migration; the next write upgrades
-them to version 4 atomically. Observations written before schema 3 have no
-individual-check evidence and cannot establish an assessment streak. Older Aegis binaries reject the newer
-schema.
+Versions 1 through 4 remain readable without migration; the next write upgrades
+them to version 5 atomically. Observations written before schema 3 have no
+individual-check evidence and cannot establish an assessment streak. Older Aegis
+binaries reject the newer schema.
 
 ## Monitor one container
 
@@ -262,8 +262,10 @@ select the inspection policy; each reservation also displays its saved policy.
 The default budget allows three attempts within `(now - 1h, now]` and ends
 cooldown exactly five minutes after the last reservation. All committed
 reservations count, including canceled and unsuccessful attempts. Any unresolved
-reservation blocks all services in the host journal. A planned reservation never
-expires automatically. Budget availability does not authorize a restart.
+reservation blocks all services in the host journal. Startup cancels an interrupted
+planned reservation without refunding it. Dispatching and verifying actions become
+uncertain and require explicit acknowledgment. Budget availability does not
+authorize a restart.
 
 The first accepted reservation records known coverage for its initial window.
 Policy changes retain all attempts; a window extending before known coverage is
@@ -274,8 +276,8 @@ Read-only inspection does not update it.
 
 Use one canonical journal per host. Routine retention never prunes reservations,
 coverage, or clock metadata. Optional linked assessment snapshots survive
-observation and assessment pruning. Planned reservations remain blocking until
-the later lifecycle and reconciliation feature implements resolution.
+observation and assessment pruning. Action audit and acknowledgment records are
+retained too. See the reconciliation procedure below.
 
 Run the isolated reservation scenarios without Docker or an operational database:
 
@@ -285,9 +287,70 @@ go test -v ./internal/store -run 'TestReservation|TestCooldown|TestBudget|TestPo
 
 Each test uses private temporary SQLite files and removes them afterward. Tests
 use terminal-state fixtures to check budget and cooldown independently of the
-unresolved-action block. No public lifecycle or fake-attempt command is added.
+unresolved-action block. Fixtures seed states only in private temporary journals;
+no public command manufactures attempts.
 See [reservation semantics](docs/recovery-reservations.md) for exact boundaries,
 clock behavior, service identity, concurrency, and retention limits.
+
+## Reconcile interrupted actions and acknowledge uncertainty
+
+Monitoring acquires its exclusive owner lock and reconciles unfinished actions
+before collecting observations. A planned action becomes canceled because no
+mutation was dispatched. An interrupted dispatch or verification inspects only
+the recorded full Docker ID, then becomes uncertain. Startup never resends an
+operation or infers success from one healthy result or a changed execution start.
+If recording reconciliation fails, monitoring stops before collection. Once
+uncertainty is recorded, read-only monitoring can continue; reservations remain
+blocked. Existing uncertain and terminal outcomes are unchanged on later startup.
+
+Find recorded action IDs in the budget command's reservation history. Inspect an
+existing action without Docker:
+
+```sh
+read -r -p 'Existing action ID from budget history: ' action_id
+./bin/aegis actions --id "$action_id" --db data/aegis.db
+```
+
+The output includes original intent, policy, exact target, current state, audit
+history, recorded inspection evidence or its absence, acknowledgment, and any
+remaining unresolved-action block. All inspection evidence is historical.
+
+To acknowledge an uncertain outcome, first stop the monitor with Ctrl+C. Review
+the action and its evidence, then provide your explanation:
+
+```sh
+read -r -p 'Reason for accepting this uncertainty: ' reason
+./bin/aegis actions acknowledge --id "$action_id" --reason "$reason" --db data/aegis.db
+./bin/aegis actions --id "$action_id" --db data/aegis.db
+```
+
+The reason must contain 1 to 512 UTF-8 bytes, include non-whitespace text, and
+contain no control characters. Acknowledgment refuses while a daemon owns the
+same data directory. It accepts only an uncertain action. The state stays
+`uncertain`; acknowledgment time and reason resolve its block. Original intent,
+uncertainty, inspection evidence, and consumed attempt remain. A repeat returns
+`already acknowledged` and preserves the original time and reason. Budget,
+cooldown, clock, and other prerequisites still apply. No new action is reserved
+and no Docker operation is executed. Successful and repeated acknowledgment return
+`0`; invalid arguments return `2`; unknown IDs, wrong states, lock conflicts, and
+persistence failures return `1`.
+
+Normal monitoring currently creates no reservations, so an operational journal
+may contain no action IDs. Do not manufacture actions in it to try the command.
+Run the repeatable simulated demonstration instead:
+
+```sh
+bash scripts/smoke-actions.sh
+```
+
+This uses test-only lifecycle fixtures, a fake Docker API, private temporary
+SQLite files, and real CLI child processes. It demonstrates interrupted
+verification becoming uncertain, monitoring continuing, acknowledgment refusing
+while the daemon runs, explicit acknowledgment after shutdown, and preserved
+audit and budget history. Cleanup removes only its temporary files and processes.
+It needs Go, CGO, and a C compiler, but no Docker daemon. It does not demonstrate
+recovery from a real dispatched restart. See the
+[reconciliation design note](docs/action-reconciliation-design.md).
 
 ## Run automated checks
 

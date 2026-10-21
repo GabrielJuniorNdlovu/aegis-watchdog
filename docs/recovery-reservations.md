@@ -2,8 +2,8 @@
 
 A reservation records a proposed attempt and consumes budget. It does not
 establish restart eligibility or authorize a Docker operation. The live monitor
-never calls the reservation operation. No public command creates, cancels,
-executes, or resolves reservations.
+never calls the reservation operation. No public command creates, dispatches, or
+executes reservations. Explicit acknowledgment can resolve an uncertain outcome without proving success.
 
 ## Explicit logical service identity
 
@@ -32,10 +32,11 @@ is excluded. Cooldown ends exactly at `last reservation + cooldown`.
 
 All committed reservations consume budget. Success, failure, cancellation, and
 uncertainty never refund attempts. Planned, dispatching, verifying, and uncertain
-states remain unresolved. Any unresolved row blocks new reservations for every
-service in the host journal, even after its window or cooldown has elapsed.
-Terminal states exist for accounting and test fixtures. No production state
-transition operation is implemented in this feature.
+states remain unresolved unless uncertainty has an explicit acknowledgment.
+Any unresolved row blocks new reservations for every service in the host journal, even after its window or cooldown has elapsed.
+Startup cancels interrupted planned actions without refunding attempts.
+Dispatching and verifying become uncertain. No production executor transitions
+actions into dispatching, verifying, succeeded, or failed yet.
 
 On the first accepted reservation, the service's coverage starts at
 `now - initial window`. That initial period is a known empty journal followed by
@@ -54,7 +55,9 @@ reservation archival is not implemented.
 ## Atomic writes and clock safety
 
 `Reserve` validates its inputs and acquires the existing data-directory ownership
-lock. SQLite's immediate write transaction reads the journal, checks limits, and
+lock. Its transaction blocks unfinished planned, dispatching, or verifying rows
+as `startup_reconciliation_required` until monitor startup reconciles them.
+SQLite's immediate write transaction reads the journal, checks limits, and
 inserts one planned reservation. A partial unique index independently permits
 only one unresolved row. Separate connections cannot both pass the checks.
 The journal itself is the attempt counter. Storage or commit failure returns an
@@ -95,11 +98,13 @@ policies saved in reservations. The defaults are `--max-attempts 3`,
 zero because inspection succeeded. Invalid arguments return 2. Read failures
 return 1. Output says `budget available`, never that a restart is permitted.
 
-Schema 4 adds these records through the existing transactional migration path.
-Versions 1 through 3 remain readable without modification; they have no reservation
-coverage. The next write migrates them atomically. Newer schemas are rejected.
+Schema 4 added reservations. Schema 5 adds acknowledgment fields and atomic audit
+records. Versions 1 through 4 remain readable without modification. Versions
+before 4 have no reservation coverage. The next write migrates them atomically.
+Newer schemas are rejected.
 
-A planned reservation remains blocking until the later lifecycle and
-reconciliation feature provides a resolution path. Deleting an operational
-database to remove this block would destroy the budget journal and is not a
-resolution procedure.
+Startup reconciles unfinished actions under the owner lock. An uncertain action
+blocks reservations until `aegis actions acknowledge` records an explicit operator
+reason with the daemon stopped. Acknowledgment preserves budget and uncertainty.
+Action audit and acknowledgment history are never routine-pruned. See
+[action reconciliation](action-reconciliation-design.md).

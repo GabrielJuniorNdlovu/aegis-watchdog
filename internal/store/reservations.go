@@ -32,6 +32,8 @@ func (p Proposal) validate(now time.Time) error {
 }
 
 type Reservation struct {
+	AcknowledgedAt         time.Time
+	AcknowledgmentReason   string
 	ID                     int64
 	ServiceID, ContainerID string
 	ReservedAt             time.Time
@@ -68,7 +70,7 @@ func Reserve(ctx context.Context, path string, p Proposal, now time.Time) (Reser
 func reserve(ctx context.Context, path string, p Proposal, now time.Time) (ReservationResult, error) {
 	var outcome ReservationResult
 	err := write(ctx, path, func(ctx context.Context, tx *sql.Tx) error {
-		facts, err := reservationFacts(ctx, tx, p.ServiceID, p.Policy, now)
+		facts, err := reservationFacts(ctx, tx, p.ServiceID, p.Policy, now, true)
 		if err != nil {
 			return err
 		}
@@ -77,6 +79,15 @@ func reserve(ctx context.Context, path string, p Proposal, now time.Time) (Reser
 			facts.CoverageStart = now.Add(-p.Policy.Window)
 		}
 		outcome.Decision = budget.Evaluate(facts, p.Policy, now)
+		var unfinished int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM reservations WHERE state IN ('planned','dispatching','verifying')`).Scan(&unfinished); err != nil {
+			return err
+		}
+		if unfinished > 0 && !outcome.Decision.ClockUnsafe {
+			outcome.Decision.Available = false
+			outcome.Decision.Reason = "startup_reconciliation_required"
+			outcome.Decision.Explanation = "Unfinished actions require startup reconciliation before another reservation can be accepted."
+		}
 		high := now
 		for _, at := range []time.Time{facts.HighWater, facts.LatestHostReservation} {
 			if at.After(high) {
@@ -132,7 +143,7 @@ func reserve(ctx context.Context, path string, p Proposal, now time.Time) (Reser
 	return outcome, nil
 }
 
-func reservationFacts(ctx context.Context, q *sql.Tx, service string, p budget.Policy, now time.Time) (budget.Facts, error) {
+func reservationFacts(ctx context.Context, q *sql.Tx, service string, p budget.Policy, now time.Time, acknowledgmentFields bool) (budget.Facts, error) {
 	var f budget.Facts
 	readTime := func(query string, args ...any) (time.Time, error) {
 		var s sql.NullString
@@ -168,9 +179,17 @@ func reservationFacts(ctx context.Context, q *sql.Tx, service string, p budget.P
 	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM reservations WHERE service_id=? AND reserved_at>? AND reserved_at<=?`, service, now.Add(-p.Window).UTC().Format(timestampLayout), now.UTC().Format(timestampLayout)).Scan(&f.Attempts); err != nil {
 		return f, err
 	}
-	err = q.QueryRowContext(ctx, `SELECT reservation_id,service_id FROM reservations WHERE state IN ('planned','dispatching','verifying','uncertain') LIMIT 1`).Scan(&f.UnresolvedID, &f.UnresolvedService)
+	where := unresolvedWhere(acknowledgmentFields)
+	err = q.QueryRowContext(ctx, `SELECT reservation_id,service_id FROM reservations WHERE `+where+` LIMIT 1`).Scan(&f.UnresolvedID, &f.UnresolvedService)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return f, err
 	}
 	return f, nil
+}
+
+func unresolvedWhere(acknowledgments bool) string {
+	if acknowledgments {
+		return "state IN ('planned','dispatching','verifying') OR (state='uncertain' AND acknowledged_at IS NULL)"
+	}
+	return "state IN ('planned','dispatching','verifying','uncertain')"
 }

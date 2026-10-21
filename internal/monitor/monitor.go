@@ -11,7 +11,6 @@ import (
 
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
-	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/ownership"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 	"github.com/moby/moby/client"
 )
@@ -55,20 +54,25 @@ func Run(ctx context.Context, docker *client.Client, config Config, stdout, stde
 		defer cancel()
 		return inspection.Inspect(requestCtx, docker, config.Target)
 	}
-	return loop(ctx, config, collect, time.Now, waitInterval, stdout, stderr)
+	return loop(ctx, config, collect, func(ctx context.Context, id string) (inspection.Result, error) {
+		return inspection.Inspect(ctx, docker, id)
+	}, time.Now, waitInterval, stdout, stderr)
 }
 
 // collect, now, and wait are small seams for deterministic scheduling tests.
 // Production waits only after a complete collection/write cycle, never on a ticker.
-func loop(ctx context.Context, config Config, collect func(context.Context) (inspection.Result, error), now func() time.Time, wait func(context.Context, time.Duration) error, stdout, stderr io.Writer) error {
+func loop(ctx context.Context, config Config, collect func(context.Context) (inspection.Result, error), inspectExact func(context.Context, string) (inspection.Result, error), now func() time.Time, wait func(context.Context, time.Duration) error, stdout, stderr io.Writer) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
 	if ctx.Err() != nil {
 		return nil
 	}
-	lock, err := ownership.Acquire(config.DBPath)
+	lock, err := store.ReconcileStartup(ctx, config.DBPath, inspectExact, now)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return err
 	}
 	defer lock.Close()

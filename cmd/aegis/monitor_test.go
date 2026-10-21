@@ -41,7 +41,7 @@ func TestMonitorDatabaseFailureExit(t *testing.T) {
 	}
 	inspectionAPI(t, "healthy", 200)
 	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"monitor", "--container", "demo", "--db", path}, &out, &errOut); code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), "cannot persist history") {
+	if code := run(context.Background(), []string{"monitor", "--container", "demo", "--db", path}, &out, &errOut); code != 1 || out.Len() != 0 || !strings.Contains(errOut.String(), "startup reconciliation failed") {
 		t.Fatalf("code=%d out=%q err=%q", code, out.String(), errOut.String())
 	}
 }

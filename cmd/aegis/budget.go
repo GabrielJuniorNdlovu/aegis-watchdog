@@ -77,11 +77,14 @@ func inspectBudgetCommand(ctx context.Context, args []string, now time.Time, std
 	}
 	for _, r := range h.Reservations {
 		fmt.Fprintf(&out, "\nReservation: %d\nReserved at: %s\nState: %s\nTarget Docker ID: %s\nReserved policy: max attempts %d; window %s; cooldown %s\n", r.ID, timestamp(r.ReservedAt), r.State, r.ContainerID, r.Policy.MaxAttempts, r.Policy.Window, r.Policy.Cooldown)
+		if !r.AcknowledgedAt.IsZero() {
+			fmt.Fprintf(&out, "Uncertainty acknowledged at: %s\nOperator reason: %s\n", timestamp(r.AcknowledgedAt), r.AcknowledgmentReason)
+		}
 		if r.Assessment != nil {
 			fmt.Fprintf(&out, "Assessment reference: %d (retained snapshot)\nAssessment evaluated at: %s\nAssessment: %s\nAssessment reason: %s\n", r.AssessmentID, timestamp(r.Assessment.EvaluatedAt), r.Assessment.Status, r.Assessment.Reason)
 		}
 	}
-	fmt.Fprintln(&out, "No restart is authorized or executed. Planned reservations remain blocking until a later lifecycle and reconciliation feature resolves them.")
+	fmt.Fprintln(&out, "No restart is authorized or executed. Startup cancels interrupted planned actions; uncertainty requires explicit acknowledgment without a budget refund.")
 	if _, err := io.WriteString(stdout, out.String()); err != nil {
 		fmt.Fprintln(stderr, "aegis: cannot write budget inspection output")
 		return 1
