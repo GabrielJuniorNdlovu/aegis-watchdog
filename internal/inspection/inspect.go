@@ -36,6 +36,7 @@ func ValidID(id string) bool {
 // Result contains only metadata safe to display. Docker health is independent
 // of lifecycle; a stopped container may retain an earlier health result.
 type Result struct {
+	Evidence    Evidence
 	Name        string
 	ID          string
 	Lifecycle   string
@@ -98,6 +99,11 @@ func Inspect(ctx context.Context, docker *client.Client, selector string) (Resul
 				}
 			}
 		}
+	}
+	var evidenceErr error
+	result.Evidence, evidenceErr = readEvidence(response.Raw, check != nil && len(check.Test) > 0 && check.Test[0] != "NONE")
+	if evidenceErr != nil {
+		return Result{}, invalid
 	}
 	if result.CheckTime.IsZero() {
 		result.Explanation += " No completed health-check timestamp is available."

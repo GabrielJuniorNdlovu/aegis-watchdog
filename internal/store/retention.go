@@ -20,6 +20,7 @@ func Prune(ctx context.Context, path string, cutoff time.Time) (int64, error) {
 	err := write(ctx, path, func(ctx context.Context, tx *sql.Tx) error {
 		for _, query := range []string{
 			`DELETE FROM observations WHERE sequence IN (SELECT sequence FROM observations WHERE observed_at < ? ORDER BY observed_at,sequence LIMIT ?)`,
+			`DELETE FROM assessments WHERE sequence IN (SELECT sequence FROM assessments WHERE evaluated_at < ? ORDER BY evaluated_at,sequence LIMIT ?)`,
 			`DELETE FROM collection_errors WHERE sequence IN (SELECT sequence FROM collection_errors WHERE collected_at < ? ORDER BY collected_at,sequence LIMIT ?)`,
 		} {
 			result, err := tx.ExecContext(ctx, query, cutoff.UTC().Format(timestampLayout), PruneBatch)

@@ -93,7 +93,7 @@ func TestVersionOneReadCompatibilityAndMigration(t *testing.T) {
 		t.Fatalf("migration lost history: %v %v", rows, err)
 	}
 	var version int
-	if err := readSQL(t, path).QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+	if err := readSQL(t, path).QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 }

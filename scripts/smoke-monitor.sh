@@ -42,6 +42,8 @@ CGO_ENABLED=1 go build -o "$temp_dir/aegis" ./cmd/aegis
 container_id=$("${compose[@]}" ps -q healthy)
 [[ -n $container_id ]]
 database="$temp_dir/data/history.db"
+restart_count=$(docker inspect --format '{{.RestartCount}}' "$container_id")
+execution_start=$(docker inspect --format '{{.State.StartedAt}}' "$container_id")
 
 start_monitor() {
   "$temp_dir/aegis" monitor --container "$container_id" --interval 200ms --retention 168h --db "$database" >"$temp_dir/monitor.out" 2>"$temp_dir/monitor.err" &
@@ -71,21 +73,56 @@ wait_for_health() {
   done
 }
 
+read_assessments() {
+  DOCKER_HOST=invalid-Docker-host "$temp_dir/aegis" assessments --container "$container_id" --limit 1000 --db "$database"
+}
+wait_for_assessment() {
+  local expected=$1 deadline=$((SECONDS + 30))
+  while :; do
+    if assessments=$(read_assessments 2>"$temp_dir/assessments.err"); then
+      if [[ $(awk '/^Assessment: / {sub(/^Assessment: /, ""); print; exit}' <<<"$assessments") == "$expected" ]]; then
+        printf 'PASS: assessment %s\n' "$expected"
+        return
+      fi
+    fi
+    if ! kill -0 "$monitor_pid" 2>/dev/null || ((SECONDS >= deadline)); then
+      echo "Monitor did not assess $expected" >&2
+      cat "$temp_dir/monitor.err" "$temp_dir/assessments.err" >&2
+      printf '%s\n' "${assessments:-}" >&2
+      exit 1
+    fi
+    sleep 0.2
+  done
+}
+
 start_monitor
 wait_for_health healthy
+wait_for_assessment healthy
 printf 'PASS: another process reads healthy history while monitoring\n'
 rm -- "$AEGIS_DEMO_CONTROL_DIR/healthy"
+wait_for_assessment suspect
+wait_for_assessment 'persistent failure'
 wait_for_health unhealthy
 grep -Fxq 'Health: healthy' <<<"$history"
 printf 'PASS: history preserves healthy and unhealthy observations\n'
+touch "$AEGIS_DEMO_CONTROL_DIR/healthy"
+wait_for_assessment recovering
+wait_for_assessment healthy
+for expected in healthy suspect 'persistent failure' recovering; do
+  grep -Fxq "Assessment: $expected" <<<"$assessments"
+done
+grep -Fq 'No recovery action is authorized or executed.' <<<"$assessments"
+[[ $(docker inspect --format '{{.RestartCount}}' "$container_id") == "$restart_count" ]]
+[[ $(docker inspect --format '{{.State.StartedAt}}' "$container_id") == "$execution_start" ]]
+printf 'PASS: healthy -> suspect -> persistent failure -> recovering -> healthy; restart count unchanged (%s)\n' "$restart_count"
 stop_monitor
 history=$(read_history)
 saved_count=$(grep -c '^Observed at: ' <<<"$history")
 printf 'PASS: SIGTERM exits successfully and history survives shutdown\n'
-touch "$AEGIS_DEMO_CONTROL_DIR/healthy"
 start_monitor
 wait_for_health healthy
-[[ $(grep -c '^Observed at: ' <<<"$history") -gt $saved_count ]]
-grep -Fxq 'Health: unhealthy' <<<"$history"
+wait_for_assessment healthy
+[[ $(grep -c '^Observed at: ' <<<"$(read_history)") -gt $saved_count ]]
+grep -Fxq 'Health: unhealthy' <<<"$(read_history)"
 stop_monitor
 printf 'PASS: restart reacquires the lock and appends to persisted history\n'

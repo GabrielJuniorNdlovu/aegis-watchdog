@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 	"github.com/moby/moby/client"
@@ -21,6 +22,7 @@ const (
 )
 
 type Config struct {
+	Policy    assessment.Policy
 	Target    string
 	DBPath    string
 	Interval  time.Duration
@@ -33,6 +35,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.DBPath) == "" {
 		return errors.New("database path must not be empty")
+	}
+	if err := c.Policy.Validate(); err != nil {
+		return err
 	}
 	if c.Interval <= 0 {
 		return errors.New("interval must be positive")
@@ -66,6 +71,8 @@ func loop(ctx context.Context, config Config, collect func(context.Context) (ins
 		return err
 	}
 	defer lock.Close()
+	policy := config.Policy
+	state := assessment.NewState(now(), policy)
 	var lastPrune time.Time
 	for {
 		if ctx.Err() != nil {
@@ -76,21 +83,31 @@ func loop(ctx context.Context, config Config, collect func(context.Context) (ins
 		if ctx.Err() != nil {
 			return nil
 		}
+		category := ""
 		if collectionErr != nil {
-			if err := store.SaveCollectionError(ctx, config.DBPath, config.Target, at, collectionErr); err != nil {
-				return persistenceError(ctx, err)
-			}
+			category, _ = inspection.FailureDetails(collectionErr)
+		}
+		next, evaluated := assessment.Evaluate(state, assessment.Input{Observation: result, CollectedAt: at, ErrorCategory: category}, policy, at)
+		if err := store.SaveMonitoringResult(ctx, config.DBPath, config.Target, result, collectionErr, evaluated); err != nil {
+			return persistenceError(ctx, err)
+		}
+		state = next
+		if collectionErr != nil {
 			category, message := inspection.FailureDetails(collectionErr)
 			if _, err := fmt.Fprintf(stderr, "Collection error at: %s\nTarget: %s\nCategory: %s\nExplanation: %s\n", at.Format(time.RFC3339Nano), config.Target, category, message); err != nil {
 				return fmt.Errorf("write monitor error output: %w", err)
 			}
 		} else {
-			if err := store.Save(ctx, config.DBPath, result, at); err != nil {
-				return persistenceError(ctx, err)
-			}
 			if _, err := fmt.Fprintf(stdout, "Observed at: %s\n%s", at.Format(time.RFC3339Nano), result.Text(at)); err != nil {
 				return fmt.Errorf("write monitor output: %w", err)
 			}
+		}
+		writer := stdout
+		if collectionErr != nil {
+			writer = stderr
+		}
+		if _, err := fmt.Fprintf(writer, "Assessment: %s\nReason: %s\nExplanation: %s\n", evaluated.Status, evaluated.Reason, evaluated.Explanation); err != nil {
+			return fmt.Errorf("write assessment output: %w", err)
 		}
 		pruneAt := now()
 		if lastPrune.IsZero() || pruneAt.Sub(lastPrune) >= PruneInterval {
