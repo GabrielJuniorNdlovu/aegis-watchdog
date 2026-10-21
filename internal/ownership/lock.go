@@ -1,4 +1,4 @@
-package monitor
+package ownership
 
 import (
 	"errors"
@@ -8,9 +8,9 @@ import (
 	"syscall"
 )
 
-// acquireLock holds one kernel lock per data directory. Never unlink the file:
+// Acquire holds one kernel lock per data directory. Never unlink the file:
 // doing so would let a second process lock a different inode at the same path.
-func acquireLock(database string) (*os.File, error) {
+func Acquire(database string) (*os.File, error) {
 	absolute, err := filepath.Abs(database)
 	if err != nil {
 		return nil, err

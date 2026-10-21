@@ -11,6 +11,7 @@ import (
 
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/ownership"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 	"github.com/moby/moby/client"
 )
@@ -66,7 +67,7 @@ func loop(ctx context.Context, config Config, collect func(context.Context) (ins
 	if ctx.Err() != nil {
 		return nil
 	}
-	lock, err := acquireLock(config.DBPath)
+	lock, err := ownership.Acquire(config.DBPath)
 	if err != nil {
 		return err
 	}

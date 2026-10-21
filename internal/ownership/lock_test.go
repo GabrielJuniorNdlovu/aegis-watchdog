@@ -1,4 +1,4 @@
-package monitor
+package ownership
 
 import (
 	"bufio"
@@ -16,7 +16,7 @@ func TestLockProcessHelper(t *testing.T) {
 	if path == "" {
 		return
 	}
-	lock, err := acquireLock(path)
+	lock, err := Acquire(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestLockReleasedAfterProcessKill(t *testing.T) {
 	if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "locked\n" {
 		t.Fatalf("child lock: %q %v", line, err)
 	}
-	if lock, err := acquireLock(path); err == nil {
+	if lock, err := Acquire(path); err == nil {
 		lock.Close()
 		t.Fatal("second process acquired live lock")
 	}
@@ -54,7 +54,7 @@ func TestLockReleasedAfterProcessKill(t *testing.T) {
 	if err := cmd.Wait(); err == nil {
 		t.Fatal("child did not terminate abruptly")
 	}
-	lock, err := acquireLock(path)
+	lock, err := Acquire(path)
 	if err != nil {
 		t.Fatal("crash retained lock:", err)
 	}
@@ -69,7 +69,7 @@ func TestLockAliasesAndDifferentDirectories(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	lock, err := acquireLock(path)
+	lock, err := Acquire(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,11 +78,11 @@ func TestLockAliasesAndDifferentDirectories(t *testing.T) {
 	if err := os.Symlink(path, alias); err != nil {
 		t.Fatal(err)
 	}
-	if file, err := acquireLock(alias); err == nil {
+	if file, err := Acquire(alias); err == nil {
 		file.Close()
 		t.Fatal("database symlink bypassed lock")
 	}
-	other, err := acquireLock(filepath.Join(t.TempDir(), "different.db"))
+	other, err := Acquire(filepath.Join(t.TempDir(), "different.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

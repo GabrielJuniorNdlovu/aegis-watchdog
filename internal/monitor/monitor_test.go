@@ -18,6 +18,7 @@ import (
 
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/ownership"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 	"github.com/moby/moby/client"
 )
@@ -147,7 +148,7 @@ func TestPersistenceFailureIsFatal(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "cannot persist history") || calls != 1 {
 				t.Fatalf("calls=%d err=%v", calls, err)
 			}
-			lock, err := acquireLock(cfg.DBPath)
+			lock, err := ownership.Acquire(cfg.DBPath)
 			if err != nil {
 				t.Fatal("fatal error retained lock:", err)
 			}
