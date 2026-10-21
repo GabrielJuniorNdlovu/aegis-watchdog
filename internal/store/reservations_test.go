@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -330,5 +332,38 @@ func TestRetentionPreservesAllReservationAccounting(t *testing.T) {
 	h = inspect(t, path, p, testTime.Add(365*24*time.Hour))
 	if len(h.Reservations) != 2 {
 		t.Fatal("journal was pruned", h)
+	}
+}
+
+func TestBudgetRestartClockHelper(t *testing.T) {
+	path := os.Getenv("AEGIS_TEST_BUDGET_RESTART_PATH")
+	if path == "" {
+		return
+	}
+	out, err := Reserve(context.Background(), path, proposal(), testTime)
+	if err != nil || out.Decision.Reason != "clock_unsafe" || out.Reservation != nil {
+		t.Fatal(out, err)
+	}
+}
+func TestBudgetClockSurvivesFreshProcess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "restart.db")
+	p := proposal()
+	r := accept(t, path, p, testTime)
+	terminal(t, path, r.ID, "failed")
+	p.Policy.Window *= 2
+	out, err := Reserve(context.Background(), path, p, testTime.Add(time.Minute))
+	if err != nil || out.Decision.Reason != "insufficient_history" {
+		t.Fatal(out, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBudgetRestartClockHelper$")
+	cmd.Env = append(os.Environ(), "AEGIS_TEST_BUDGET_RESTART_PATH="+path)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("fresh process forgot clock evidence: %v %s", err, output)
+	}
+	h := inspect(t, path, proposal(), testTime.Add(time.Minute))
+	if h.Decision.Attempts != 1 {
+		t.Fatal("blocked process consumed budget", h)
 	}
 }

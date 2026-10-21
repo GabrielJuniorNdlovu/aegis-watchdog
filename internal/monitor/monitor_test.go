@@ -232,7 +232,7 @@ func TestRunReadOnlyHistoryAndSecondMonitor(t *testing.T) {
 	}
 	other := cfg
 	other.DBPath = filepath.Join(filepath.Dir(cfg.DBPath), "other.db")
-	if err := Run(ctx, docker, other, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "another monitor") {
+	if err := Run(ctx, docker, other, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "another Aegis process") {
 		t.Fatalf("second monitor: %v", err)
 	}
 	if _, err := os.Stat(other.DBPath); !os.IsNotExist(err) {

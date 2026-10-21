@@ -1,4 +1,4 @@
-// Package store persists only allowlisted container observation metadata.
+// Package store persists allowlisted observations, assessments, and reservation intent.
 package store
 
 import (

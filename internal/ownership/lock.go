@@ -31,7 +31,7 @@ func Acquire(database string) (*os.File, error) {
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		file.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, errors.New("another monitor is already using this data directory")
+			return nil, errors.New("another Aegis process is already using this data directory")
 		}
 		return nil, fmt.Errorf("acquire monitor lock: %w", err)
 	}

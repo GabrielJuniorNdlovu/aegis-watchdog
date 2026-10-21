@@ -132,11 +132,7 @@ func reserve(ctx context.Context, path string, p Proposal, now time.Time) (Reser
 	return outcome, nil
 }
 
-type rowQuerier interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
-func reservationFacts(ctx context.Context, q rowQuerier, service string, p budget.Policy, now time.Time) (budget.Facts, error) {
+func reservationFacts(ctx context.Context, q *sql.Tx, service string, p budget.Policy, now time.Time) (budget.Facts, error) {
 	var f budget.Facts
 	readTime := func(query string, args ...any) (time.Time, error) {
 		var s sql.NullString

@@ -25,6 +25,7 @@ const usage = "Usage:\n" +
 	"  aegis errors --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n" +
 	"  aegis assessments --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n" +
 	"  aegis monitor --container <name-or-id> [--interval <duration>] [--retention <duration>] [--db <path>] [assessment options]\n" +
+	budgetUsage +
 	"Assessment options: --failure-threshold 3 --recovery-threshold 2 --max-evidence-age 1m --max-check-gap 1m\n"
 
 func main() {
@@ -38,6 +39,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Fprint(stdout, usage)
 		return 0
+	}
+	if len(args) > 0 && args[0] == "budget" {
+		return inspectBudgetCommand(ctx, args[1:], time.Now().UTC(), stdout, stderr)
 	}
 	if len(args) == 0 || (args[0] != "inspect" && args[0] != "history" && args[0] != "errors" && args[0] != "monitor" && args[0] != "assessments") {
 		fmt.Fprint(stderr, usage)
