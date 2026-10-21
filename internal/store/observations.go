@@ -1,4 +1,4 @@
-// Package store persists only allowlisted container observation metadata.
+// Package store persists allowlisted observations, assessments, and reservation intent.
 package store
 
 import (
@@ -21,7 +21,7 @@ const (
 	DefaultPath   = "data/aegis.db"
 	DefaultLimit  = 20
 	MaxLimit      = 1000
-	schemaVersion = 3
+	schemaVersion = 4
 	// Fixed-width UTC text sorts chronologically, including fractional seconds.
 	timestampLayout = "2006-01-02T15:04:05.000000000Z"
 )
@@ -145,6 +145,11 @@ func write(ctx context.Context, path string, operation func(context.Context, *sq
 			return fmt.Errorf("migrate SQLite assessments: %w", err)
 		}
 	}
+	if version < 4 {
+		if _, err := tx.ExecContext(ctx, schemaV4); err != nil {
+			return fmt.Errorf("migrate SQLite reservations: %w", err)
+		}
+	}
 	if err := operation(ctx, tx); err != nil {
 		return err
 	}
@@ -256,7 +261,7 @@ func open(path string, readOnly bool) (*sql.DB, error) {
 		}
 	}
 	uri := url.URL{Scheme: "file", Path: absolute}
-	query := url.Values{"mode": {mode}, "_busy_timeout": {"1000"}}
+	query := url.Values{"mode": {mode}, "_busy_timeout": {"1000"}, "_foreign_keys": {"on"}}
 	if !readOnly {
 		query.Set("_synchronous", "FULL")
 		query.Set("_txlock", "immediate")

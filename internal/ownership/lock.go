@@ -1,4 +1,4 @@
-package monitor
+package ownership
 
 import (
 	"errors"
@@ -8,9 +8,9 @@ import (
 	"syscall"
 )
 
-// acquireLock holds one kernel lock per data directory. Never unlink the file:
+// Acquire holds one kernel lock per data directory. Never unlink the file:
 // doing so would let a second process lock a different inode at the same path.
-func acquireLock(database string) (*os.File, error) {
+func Acquire(database string) (*os.File, error) {
 	absolute, err := filepath.Abs(database)
 	if err != nil {
 		return nil, err
@@ -31,7 +31,7 @@ func acquireLock(database string) (*os.File, error) {
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		file.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, errors.New("another monitor is already using this data directory")
+			return nil, errors.New("another Aegis process is already using this data directory")
 		}
 		return nil, fmt.Errorf("acquire monitor lock: %w", err)
 	}

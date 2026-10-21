@@ -99,7 +99,7 @@ Each explicit save inserts a row, even when the
 health-check timestamp repeats. These rows do not represent independent checks
 and are not failure streaks.
 
-The initial schema migration and first insert commit together. Schema version 3
+The initial schema migration and first insert commit together. Schema version 4
 uses `PRAGMA user_version`, a DELETE rollback journal, `synchronous=FULL`, a
 one-second busy timeout, and parameterized queries. Each database operation has
 a five-second context deadline, separate from the Docker request deadline.
@@ -125,9 +125,9 @@ target rather than a guessed Docker ID:
 ```
 
 The errors command opens SQLite read-only and requires no Docker connection.
-Version 1 and 2 databases remain readable without migration; the next write upgrades
-them to version 3 atomically. Old observations have no individual-check evidence
-and cannot establish an assessment streak. Older Aegis binaries reject the newer
+Version 1, 2, and 3 databases remain readable without migration; the next write upgrades
+them to version 4 atomically. Observations written before schema 3 have no
+individual-check evidence and cannot establish an assessment streak. Older Aegis binaries reject the newer
 schema.
 
 ## Monitor one container
@@ -239,6 +239,55 @@ failure stops monitoring. Every assessment states: "No recovery action is
 authorized or executed." `recovering` describes successful application checks;
 Aegis has taken no action to cause them. One-off `inspect --save` does not run the
 evaluator. See the [evidence design note](docs/health-assessment-design.md).
+
+## Inspect recovery budgets and reservations
+
+Feature 5 adds durable reservation and budget logic. Reservation creation is an
+internal operation exercised through temporary-database tests. Live monitoring
+does not create reservations, and no Docker restart operation is connected.
+
+Inspect the host journal without Docker:
+
+```sh
+./bin/aegis budget --service orders-api --db data/aegis.db
+./bin/aegis budget --service orders-api --max-attempts 3 --budget-window 1h --cooldown 5m --limit 20 --db data/aegis.db
+```
+
+`orders-api` is an explicit logical service ID, not a Docker container name.
+Existing monitor runs have not registered any logical services. For those
+journals, this command reports no reservations and insufficient history coverage.
+It does not create sample attempts or change the database. The policy flags
+select the inspection policy; each reservation also displays its saved policy.
+
+The default budget allows three attempts within `(now - 1h, now]` and ends
+cooldown exactly five minutes after the last reservation. All committed
+reservations count, including canceled and unsuccessful attempts. Any unresolved
+reservation blocks all services in the host journal. A planned reservation never
+expires automatically. Budget availability does not authorize a restart.
+
+The first accepted reservation records known coverage for its initial window.
+Policy changes retain all attempts; a window extending before known coverage is
+blocked until its left boundary reaches coverage. A durable clock high-water
+mark blocks backward movement with zero tolerance until time catches up.
+Reservation calls persist this timing evidence even when policy blocks them.
+Read-only inspection does not update it.
+
+Use one canonical journal per host. Routine retention never prunes reservations,
+coverage, or clock metadata. Optional linked assessment snapshots survive
+observation and assessment pruning. Planned reservations remain blocking until
+the later lifecycle and reconciliation feature implements resolution.
+
+Run the isolated reservation scenarios without Docker or an operational database:
+
+```sh
+go test -v ./internal/store -run 'TestReservation|TestCooldown|TestBudget|TestPolicyChange|TestConcurrent|TestFuture|TestEveryReservation|TestAssessmentReference|TestRetentionPreservesAll'
+```
+
+Each test uses private temporary SQLite files and removes them afterward. Tests
+use terminal-state fixtures to check budget and cooldown independently of the
+unresolved-action block. No public lifecycle or fake-attempt command is added.
+See [reservation semantics](docs/recovery-reservations.md) for exact boundaries,
+clock behavior, service identity, concurrency, and retention limits.
 
 ## Run automated checks
 

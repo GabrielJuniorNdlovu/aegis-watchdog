@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/budget"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 )
@@ -50,6 +51,10 @@ func TestMonitorPersistsAssessmentAndStartsFresh(t *testing.T) {
 		if rows[i].Status != want {
 			t.Fatalf("%d: %+v", i, rows[i])
 		}
+	}
+	h, err := store.InspectBudget(context.Background(), cfg.DBPath, cfg.Target, budget.DefaultPolicy(), current, 20)
+	if err != nil || len(h.Reservations) != 0 || !h.Facts.CoverageStart.IsZero() || !h.Facts.HighWater.IsZero() {
+		t.Fatalf("monitor created reservation state: %+v %v", h, err)
 	}
 	if rows[0].ContainerID != "" || rows[3].ContainerID != "" {
 		t.Fatal("error gained identity")
