@@ -58,7 +58,7 @@ func InspectBudget(ctx context.Context, path, service string, p budget.Policy, n
 	}
 	history.EvaluatedAt, history.Policy = now, p
 	if version >= 4 {
-		history.Facts, err = reservationFacts(ctx, tx, service, p, now)
+		history.Facts, err = reservationFacts(ctx, tx, service, p, now, version >= 5)
 		if err != nil {
 			return BudgetHistory{}, err
 		}
