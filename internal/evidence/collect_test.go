@@ -76,7 +76,7 @@ func TestLogRedactionFramingAndBounds(t *testing.T) {
 		t.Fatal("malformed framing accepted")
 	}
 }
-func fakeDocker(t *testing.T, tty bool, handler func(http.ResponseWriter, *http.Request, int)) *client.Client {
+func fakeDocker(t *testing.T, tty bool, handler func(http.ResponseWriter, *http.Request, int)) *DockerClient {
 	t.Helper()
 	inspections := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +104,7 @@ func fakeDocker(t *testing.T, tty bool, handler func(http.ResponseWriter, *http.
 		}
 	}))
 	t.Cleanup(server.Close)
-	docker, err := client.New(client.WithHost(server.URL))
+	docker, err := NewDockerClient(client.WithHost(server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}

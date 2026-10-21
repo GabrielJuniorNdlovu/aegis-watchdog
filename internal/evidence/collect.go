@@ -88,7 +88,7 @@ func snapshot(r inspection.Result) *Container {
 }
 
 // Collect uses only exact-ID inspect/log requests. No filesystem writes occur here.
-func Collect(ctx context.Context, docker *client.Client, input Input, p Limits, now func() time.Time) (Bundle, error) {
+func Collect(ctx context.Context, docker *DockerClient, input Input, p Limits, now func() time.Time) (Bundle, error) {
 	if err := p.Validate(); err != nil {
 		return Bundle{}, err
 	}
@@ -109,7 +109,7 @@ func Collect(ctx context.Context, docker *client.Client, input Input, p Limits, 
 	if input.MissingAssessments || len(input.Assessments) == 0 {
 		b.issue("persisted_assessments_missing_or_omitted")
 	}
-	before, err := inspection.Inspect(ctx, docker, input.ContainerID)
+	before, err := inspection.Inspect(ctx, docker.sdk, input.ContainerID)
 	if err != nil {
 		category, _ := inspection.FailureDetails(err)
 		b.issue("initial_inspection_" + category)
@@ -119,7 +119,7 @@ func Collect(ctx context.Context, docker *client.Client, input Input, p Limits, 
 		b.issue("logs_missing")
 	} else {
 		b.Before = snapshot(before)
-		stream, err := docker.ContainerLogs(ctx, input.ContainerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Since: b.StartedAt.Add(-p.Lookback).Format(time.RFC3339Nano), Until: b.StartedAt.Format(time.RFC3339Nano), Tail: "200"})
+		stream, err := docker.sdk.ContainerLogs(ctx, input.ContainerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Since: b.StartedAt.Add(-p.Lookback).Format(time.RFC3339Nano), Until: b.StartedAt.Format(time.RFC3339Nano), Tail: "200"})
 		if err != nil {
 			b.issue("logs_collection_failed")
 		} else {
@@ -133,7 +133,7 @@ func Collect(ctx context.Context, docker *client.Client, input Input, p Limits, 
 				b.issue("logs_stream_incomplete_or_malformed")
 			}
 		}
-		after, err := inspection.Inspect(ctx, docker, input.ContainerID)
+		after, err := inspection.Inspect(ctx, docker.sdk, input.ContainerID)
 		if err != nil {
 			category, _ := inspection.FailureDetails(err)
 			b.issue("final_inspection_" + category)
