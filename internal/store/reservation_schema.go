@@ -22,6 +22,7 @@ CREATE TABLE reservations (
  assessment_summary TEXT
 );
 CREATE INDEX reservations_service_time ON reservations(service_id,reserved_at DESC,reservation_id DESC);
+CREATE INDEX reservations_time ON reservations(reserved_at);
 CREATE UNIQUE INDEX reservations_one_unresolved ON reservations((1)) WHERE state IN ('planned','dispatching','verifying','uncertain');
 PRAGMA user_version=4;
 `

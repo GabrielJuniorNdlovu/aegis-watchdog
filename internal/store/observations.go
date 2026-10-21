@@ -261,7 +261,7 @@ func open(path string, readOnly bool) (*sql.DB, error) {
 		}
 	}
 	uri := url.URL{Scheme: "file", Path: absolute}
-	query := url.Values{"mode": {mode}, "_busy_timeout": {"1000"}}
+	query := url.Values{"mode": {mode}, "_busy_timeout": {"1000"}, "_foreign_keys": {"on"}}
 	if !readOnly {
 		query.Set("_synchronous", "FULL")
 		query.Set("_txlock", "immediate")
