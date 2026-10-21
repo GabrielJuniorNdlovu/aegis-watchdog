@@ -341,3 +341,19 @@ func TestReservationsRequireSuccessfulStartupReconciliation(t *testing.T) {
 	}
 	accept(t, path, p, testTime.Add(p.Policy.Cooldown))
 }
+
+func TestReconciliationAfterRolledBackInitialSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "initial.db")
+	ctx := context.Background()
+	if err := Save(ctx, path, result("invalid"), testTime); err == nil {
+		t.Fatal("expected first save to roll back")
+	}
+	startup(t, path, nil, testTime)
+	if err := Save(ctx, path, result("healthy"), testTime); err != nil {
+		t.Fatal("startup prevented normal initialization", err)
+	}
+	rows, err := History(ctx, path, proposal().ContainerID, 20)
+	if err != nil || len(rows) != 1 {
+		t.Fatal(rows, err)
+	}
+}

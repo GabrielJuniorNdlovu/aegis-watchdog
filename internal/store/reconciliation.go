@@ -81,7 +81,7 @@ func reconcile(ctx context.Context, path string, inspect func(context.Context, s
 		db.Close()
 		return err
 	}
-	if version < 1 || version > schemaVersion {
+	if version < 0 || version > schemaVersion {
 		db.Close()
 		return versionError(version)
 	}
