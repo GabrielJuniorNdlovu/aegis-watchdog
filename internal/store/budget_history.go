@@ -62,7 +62,7 @@ func InspectBudget(ctx context.Context, path, service string, p budget.Policy, n
 		if err != nil {
 			return BudgetHistory{}, err
 		}
-		history.Reservations, err = reservationHistory(ctx, tx, service, limit)
+		history.Reservations, err = reservationHistory(ctx, tx, service, limit, version)
 		if err != nil {
 			return BudgetHistory{}, err
 		}
@@ -74,24 +74,43 @@ func InspectBudget(ctx context.Context, path, service string, p budget.Policy, n
 	return history, nil
 }
 
-func reservationHistory(ctx context.Context, tx *sql.Tx, service string, limit int) ([]Reservation, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT reservation_id,service_id,container_id,reserved_at,state,max_attempts,window_ns,cooldown_ns,assessment_id,assessment_summary FROM reservations WHERE service_id=? ORDER BY reserved_at DESC,reservation_id DESC LIMIT ?`, service, limit)
+func reservationHistory(ctx context.Context, tx *sql.Tx, service string, limit int, version int) ([]Reservation, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT `+reservationColumns(version)+` FROM reservations WHERE service_id=? ORDER BY reserved_at DESC,reservation_id DESC LIMIT ?`, service, limit)
 	if err != nil {
 		return nil, fmt.Errorf("read reservations: %w", err)
 	}
 	defer rows.Close()
+	return readReservationRows(rows)
+}
+
+func reservationColumns(version int) string {
+	columns := "reservation_id,service_id,container_id,reserved_at,state,max_attempts,window_ns,cooldown_ns,assessment_id,assessment_summary"
+	if version >= 5 {
+		return columns + ",acknowledged_at,acknowledgment_reason"
+	}
+	return columns + ",NULL,NULL"
+}
+func readReservationRows(rows *sql.Rows) ([]Reservation, error) {
 	var history []Reservation
 	for rows.Next() {
 		var r Reservation
 		var at string
 		var ref sql.NullInt64
-		var summary sql.NullString
-		if err := rows.Scan(&r.ID, &r.ServiceID, &r.ContainerID, &at, &r.State, &r.Policy.MaxAttempts, &r.Policy.Window, &r.Policy.Cooldown, &ref, &summary); err != nil {
+		var summary, acknowledgedAt, acknowledgmentReason sql.NullString
+		if err := rows.Scan(&r.ID, &r.ServiceID, &r.ContainerID, &at, &r.State, &r.Policy.MaxAttempts, &r.Policy.Window, &r.Policy.Cooldown, &ref, &summary, &acknowledgedAt, &acknowledgmentReason); err != nil {
 			return nil, err
 		}
+		var err error
 		r.ReservedAt, err = time.Parse(timestampLayout, at)
 		if err != nil {
 			return nil, errors.New("invalid reservation time")
+		}
+		if acknowledgedAt.Valid {
+			r.AcknowledgedAt, err = time.Parse(timestampLayout, acknowledgedAt.String)
+			if err != nil {
+				return nil, errors.New("invalid acknowledgment time")
+			}
+			r.AcknowledgmentReason = acknowledgmentReason.String
 		}
 		r.AssessmentID = ref.Int64
 		if summary.Valid {

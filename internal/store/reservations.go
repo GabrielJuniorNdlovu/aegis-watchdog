@@ -32,6 +32,8 @@ func (p Proposal) validate(now time.Time) error {
 }
 
 type Reservation struct {
+	AcknowledgedAt         time.Time
+	AcknowledgmentReason   string
 	ID                     int64
 	ServiceID, ContainerID string
 	ReservedAt             time.Time
@@ -177,13 +179,17 @@ func reservationFacts(ctx context.Context, q *sql.Tx, service string, p budget.P
 	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM reservations WHERE service_id=? AND reserved_at>? AND reserved_at<=?`, service, now.Add(-p.Window).UTC().Format(timestampLayout), now.UTC().Format(timestampLayout)).Scan(&f.Attempts); err != nil {
 		return f, err
 	}
-	where := "state IN ('planned','dispatching','verifying','uncertain')"
-	if acknowledgmentFields {
-		where = "state IN ('planned','dispatching','verifying') OR (state='uncertain' AND acknowledged_at IS NULL)"
-	}
+	where := unresolvedWhere(acknowledgmentFields)
 	err = q.QueryRowContext(ctx, `SELECT reservation_id,service_id FROM reservations WHERE `+where+` LIMIT 1`).Scan(&f.UnresolvedID, &f.UnresolvedService)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return f, err
 	}
 	return f, nil
+}
+
+func unresolvedWhere(acknowledgments bool) string {
+	if acknowledgments {
+		return "state IN ('planned','dispatching','verifying') OR (state='uncertain' AND acknowledged_at IS NULL)"
+	}
+	return "state IN ('planned','dispatching','verifying','uncertain')"
 }
