@@ -103,15 +103,14 @@ func TestAssessmentCollectionErrorAndAtomicRollback(t *testing.T) {
 	if err != nil || len(failures) != 1 {
 		t.Fatal("orphan collection error", failures, err)
 	}
-	bytes, err := os.ReadFile(path)
+	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytesContainsSecret(bytes) {
+	if bytes.Contains(content, []byte("SECRET")) {
 		t.Fatal("secret persisted")
 	}
 }
-func bytesContainsSecret(b []byte) bool { return bytes.Contains(b, []byte("SECRET")) }
 func TestAssessmentLegacyMigrations(t *testing.T) {
 	for _, version := range []int{1, 2} {
 		t.Run(string(rune('0'+version)), func(t *testing.T) {
@@ -196,5 +195,23 @@ func TestAssessmentRetentionAndIndependentSummary(t *testing.T) {
 	n, err = Prune(ctx, path, testTime)
 	if err != nil || n != 1 {
 		t.Fatal(n, err)
+	}
+}
+
+func TestAssessmentKeepsCollectionAndEvaluationTimesSeparate(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "times.db")
+	r, a := evaluated(testTime, nil)
+	a.EvaluatedAt = testTime.Add(time.Second)
+	if err := SaveMonitoringResult(ctx, path, "app", r, nil, a); err != nil {
+		t.Fatal(err)
+	}
+	observations, err := History(ctx, path, r.ID, 20)
+	if err != nil || len(observations) != 1 || !observations[0].ObservedAt.Equal(testTime) {
+		t.Fatal(observations, err)
+	}
+	rows, err := AssessmentHistory(ctx, path, "app", 20)
+	if err != nil || len(rows) != 1 || !rows[0].EvaluatedAt.Equal(a.EvaluatedAt) || !rows[0].CollectedAt.Equal(testTime) {
+		t.Fatal(rows, err)
 	}
 }

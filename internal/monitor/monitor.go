@@ -36,10 +36,8 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.DBPath) == "" {
 		return errors.New("database path must not be empty")
 	}
-	if c.Policy != (assessment.Policy{}) {
-		if err := c.Policy.Validate(); err != nil {
-			return err
-		}
+	if err := c.Policy.Validate(); err != nil {
+		return err
 	}
 	if c.Interval <= 0 {
 		return errors.New("interval must be positive")
@@ -74,9 +72,6 @@ func loop(ctx context.Context, config Config, collect func(context.Context) (ins
 	}
 	defer lock.Close()
 	policy := config.Policy
-	if policy == (assessment.Policy{}) {
-		policy = assessment.DefaultPolicy()
-	}
 	state := assessment.NewState(now(), policy)
 	var lastPrune time.Time
 	for {

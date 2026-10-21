@@ -19,7 +19,7 @@ type Policy struct {
 	MaxGap            time.Duration
 }
 
-func DefaultPolicy() Policy { return Policy{3, 2, 30 * time.Second, 30 * time.Second} }
+func DefaultPolicy() Policy { return Policy{3, 2, time.Minute, time.Minute} }
 func (p Policy) Validate() error {
 	if p.FailureThreshold <= 0 || p.RecoveryThreshold <= 0 || p.MaxAge <= 0 || p.MaxGap <= 0 {
 		return errors.New("failure threshold, recovery threshold, max evidence age, and max check gap must be positive")
@@ -50,22 +50,24 @@ type Input struct {
 }
 
 type Assessment struct {
-	Boundary         time.Time
-	EvidenceExitCode *int
-	EvaluatedAt      time.Time
-	ContainerID      string
-	StartedAt        time.Time
-	Lifecycle        string
-	AggregateHealth  string
-	Status           string
-	Reason           string
-	Explanation      string
-	Failures         int
-	Successes        int
-	Persistent       bool
-	EvidenceStart    time.Time
-	EvidenceEnd      time.Time
-	Policy           Policy
+	CollectedAt             time.Time
+	CollectionErrorCategory string
+	Boundary                time.Time
+	EvidenceExitCode        *int
+	EvaluatedAt             time.Time
+	ContainerID             string
+	StartedAt               time.Time
+	Lifecycle               string
+	AggregateHealth         string
+	Status                  string
+	Reason                  string
+	Explanation             string
+	Failures                int
+	Successes               int
+	Persistent              bool
+	EvidenceStart           time.Time
+	EvidenceEnd             time.Time
+	Policy                  Policy
 }
 
 // NewState deliberately restores no persisted streaks or pre-start checks.
@@ -81,7 +83,7 @@ func Evaluate(previous State, in Input, policy Policy, now time.Time) (State, As
 	if s.Boundary.IsZero() || s.Policy != policy {
 		s = NewState(now, policy)
 	}
-	a := Assessment{EvaluatedAt: now, Policy: policy}
+	a := Assessment{EvaluatedAt: now, CollectedAt: in.CollectedAt.UTC(), CollectionErrorCategory: in.ErrorCategory, Policy: policy}
 	if in.ErrorCategory == "" {
 		a.ContainerID, a.StartedAt = r.ID, r.Evidence.StartedAt
 		a.Lifecycle, a.AggregateHealth = r.Lifecycle, r.Health
@@ -180,8 +182,11 @@ func Evaluate(previous State, in Input, policy Policy, now time.Time) (State, As
 		if i > 0 && c.Start.Before(checks[i-1].End) && !(c.Start.Equal(checks[i-1].Start) && c.End.Equal(checks[i-1].End) && checks[i-1].ExitCode != nil && *c.ExitCode == *checks[i-1].ExitCode) {
 			return unknown("overlapping_checks", "Individual check executions overlap; continuity is uncertain.")
 		}
+		if !s.LastEnd.IsZero() && c.End.After(s.LastEnd) && c.Start.Before(s.LastEnd) {
+			return unknown("overlapping_checks", "A newly observed check overlaps the last accepted execution; continuity is uncertain.")
+		}
 		if !s.LastEnd.IsZero() && !c.End.After(s.LastEnd) {
-			known := false
+			known := c.Start.Equal(s.LastStart) && c.End.Equal(s.LastEnd) && *c.ExitCode == s.LastExit
 			for _, old := range s.Seen {
 				if c.Start.Equal(old.Start) && c.End.Equal(old.End) && old.ExitCode != nil && *c.ExitCode == *old.ExitCode {
 					known = true

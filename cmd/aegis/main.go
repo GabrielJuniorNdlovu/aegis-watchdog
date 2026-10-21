@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/monitor"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
@@ -22,7 +23,9 @@ const usage = "Usage:\n" +
 	"  aegis inspect --container <name-or-id> [--save] [--db <path>]\n" +
 	"  aegis history --container <full-docker-id> [--limit <1-1000>] [--db <path>]\n" +
 	"  aegis errors --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n" +
-	"  aegis monitor --container <name-or-id> [--interval <duration>] [--retention <duration>] [--db <path>]\n"
+	"  aegis assessments --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n" +
+	"  aegis monitor --container <name-or-id> [--interval <duration>] [--retention <duration>] [--db <path>] [assessment options]\n" +
+	"Assessment options: --failure-threshold 3 --recovery-threshold 2 --max-evidence-age 1m --max-check-gap 1m\n"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -36,7 +39,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
-	if len(args) == 0 || (args[0] != "inspect" && args[0] != "history" && args[0] != "errors" && args[0] != "monitor") {
+	if len(args) == 0 || (args[0] != "inspect" && args[0] != "history" && args[0] != "errors" && args[0] != "monitor" && args[0] != "assessments") {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -48,12 +51,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	limit := store.DefaultLimit
 	interval := monitor.DefaultInterval
 	retention := monitor.DefaultRetention
-	path := flags.String("db", store.DefaultPath, "SQLite file path; used by monitor, history, errors, or inspect --save")
+	policy := assessment.DefaultPolicy()
+	path := flags.String("db", store.DefaultPath, "SQLite file path; used by monitor, history, errors, assessments, or inspect --save")
 	if args[0] == "inspect" {
 		flags.BoolVar(&save, "save", false, "save the successful inspection to SQLite")
 	} else if args[0] == "monitor" {
 		flags.DurationVar(&interval, "interval", monitor.DefaultInterval, "wait after each completed collection (must be positive)")
 		flags.DurationVar(&retention, "retention", monitor.DefaultRetention, "routine history retention (must be positive; default 168h)")
+		flags.IntVar(&policy.FailureThreshold, "failure-threshold", policy.FailureThreshold, "distinct failed checks required for persistent failure")
+		flags.IntVar(&policy.RecoveryThreshold, "recovery-threshold", policy.RecoveryThreshold, "distinct successful checks required after persistent failure")
+		flags.DurationVar(&policy.MaxAge, "max-evidence-age", policy.MaxAge, "maximum age of usable evidence")
+		flags.DurationVar(&policy.MaxGap, "max-check-gap", policy.MaxGap, "maximum gap between completed checks")
 	} else {
 		flags.IntVar(&limit, "limit", store.DefaultLimit, "maximum observations to show (1-1000)")
 	}
@@ -80,7 +88,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "aegis: database path must not be empty")
 		return 2
 	}
-	if args[0] == "history" || args[0] == "errors" {
+	if args[0] == "history" || args[0] == "errors" || args[0] == "assessments" {
 		if args[0] == "history" && !inspection.ValidID(selector) {
 			fmt.Fprintln(stderr, "aegis: history requires a full 64-character Docker ID")
 			return 2
@@ -89,12 +97,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "aegis:", err)
 			return 2
 		}
+		if args[0] == "assessments" {
+			return assessmentHistory(ctx, *path, selector, limit, time.Now().UTC(), stdout, stderr)
+		}
 		if args[0] == "errors" {
 			return errorHistory(ctx, *path, selector, limit, stdout, stderr)
 		}
 		return history(ctx, *path, selector, limit, stdout, stderr)
 	}
-	config := monitor.Config{Target: selector, DBPath: *path, Interval: interval, Retention: retention}
+	config := monitor.Config{Policy: policy, Target: selector, DBPath: *path, Interval: interval, Retention: retention}
 	if args[0] == "monitor" {
 		if err := config.Validate(); err != nil {
 			fmt.Fprintln(stderr, "aegis:", err)

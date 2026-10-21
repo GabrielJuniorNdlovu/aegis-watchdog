@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 	"github.com/moby/moby/client"
@@ -26,7 +27,7 @@ var id = strings.Repeat("a", 64)
 
 func config(t *testing.T) Config {
 	t.Helper()
-	return Config{Target: "demo", DBPath: filepath.Join(t.TempDir(), "history.db"), Interval: 5 * time.Second, Retention: DefaultRetention}
+	return Config{Policy: assessment.DefaultPolicy(), Target: "demo", DBPath: filepath.Join(t.TempDir(), "history.db"), Interval: 5 * time.Second, Retention: DefaultRetention}
 }
 
 func observation() inspection.Result {

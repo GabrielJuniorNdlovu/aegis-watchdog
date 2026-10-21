@@ -2,7 +2,8 @@
 
 Aegis inspects one explicitly selected Docker container and can save the result to
 SQLite. It reports lifecycle and application health separately, reads saved
-history without Docker, and can monitor one target periodically. It takes no recovery action.
+history without Docker, and monitors one target periodically with deterministic
+health assessments and persisted explanations. It takes no recovery action.
 The [project contract](AEGIS_PROJECT_GOAL.md) describes later work, not implemented features.
 
 ## Build and inspect a container
@@ -88,14 +89,17 @@ Failed Docker inspections save nothing. If inspection succeeds but saving fails,
 Aegis reports that distinction on stderr and exits `1`. If output fails after a
 committed save, the error states that the observation was saved.
 
-SQLite stores only the full Docker ID, observed name, UTC observation time,
-lifecycle, health, and nullable completed health-check time. An internal sequence
-number breaks ordering ties. It stores no explanation, environment variables,
-check commands, or log output. Each explicit save inserts a row, even when the
+Each observation stores the full Docker ID, observed name, UTC collection time,
+lifecycle, health, and nullable completed health-check time. Schema 3 also stores
+execution start time, whether a check is configured, and individual check start,
+end, and nullable exit code. An internal sequence number breaks ordering ties.
+Observations exclude free-form inspection explanations, environment variables,
+check commands, and log output. Assessments store Aegis-authored explanations.
+Each explicit save inserts a row, even when the
 health-check timestamp repeats. These rows do not represent independent checks
 and are not failure streaks.
 
-The initial schema migration and first insert commit together. Schema version 2
+The initial schema migration and first insert commit together. Schema version 3
 uses `PRAGMA user_version`, a DELETE rollback journal, `synchronous=FULL`, a
 one-second busy timeout, and parameterized queries. Each database operation has
 a five-second context deadline, separate from the Docker request deadline.
@@ -121,8 +125,10 @@ target rather than a guessed Docker ID:
 ```
 
 The errors command opens SQLite read-only and requires no Docker connection.
-Version 1 databases remain readable without migration; the next write upgrades
-them to version 2 atomically. Older Aegis binaries reject the newer schema.
+Version 1 and 2 databases remain readable without migration; the next write upgrades
+them to version 3 atomically. Old observations have no individual-check evidence
+and cannot establish an assessment streak. Older Aegis binaries reject the newer
+schema.
 
 ## Monitor one container
 
@@ -162,13 +168,77 @@ commands remain available while monitoring runs.
 
 Retention defaults to seven days (`168h`) and must be positive. After the first
 collection, then at most once per minute after a completed cycle, the monitor
-deletes at most 500 expired observations and 500 expired collection errors in one
-transaction. Expiration uses observation or collection time, never health-check
-time. Rows exactly at the cutoff and future-dated rows remain. A large backlog
+deletes at most 500 expired rows from each of observations, collection errors,
+and assessments in one transaction. Expiration uses observation, collection, or
+evaluation time, never health-check time. Each retained assessment carries its
+policy, counts, last check summary, identity, and explanation independently of
+raw observation retention. Rows exactly at the cutoff and future-dated rows
+remain. A large backlog
 can take multiple batches to clear; the duration is not a strict disk-size cap.
 Retention applies across all container IDs and targets in the selected database.
 No action, incident, or recovery-budget table is pruned. Deletion makes SQLite
 pages reusable but may not shrink the file; monitoring never runs `VACUUM`.
+
+## Assess health during monitoring
+
+```sh
+./bin/aegis monitor --container my-app --interval 5s --failure-threshold 3 --recovery-threshold 2 --max-evidence-age 1m --max-check-gap 1m --db data/aegis.db
+./bin/aegis assessments --container my-app --limit 20 --db data/aegis.db
+```
+
+Run the second command in another terminal. Assessment history filters the exact
+selector used by the monitor, including names, ID prefixes, or a leading slash.
+It can span container replacements when a name is reused. Each successful row
+shows the resolved full ID and execution start time. Collection-error rows have
+no container ID. The command uses SQLite read-only, never connects to Docker,
+and returns newest evaluation times first, with insertion order breaking ties.
+It displays historical evaluation and collection times, evidence age at evaluation
+and at read time, counts, effective policy, stable reason code, and explanation.
+Empty history exits `0`; invalid arguments exit `2`; read failures exit `1`.
+
+The default policy requires three failed checks for `persistent failure` and two
+successful checks after persistent failure to establish `healthy`. All four
+policy options must be positive. Individual check exit code zero succeeds; a
+positive code fails. Missing or negative exit codes are unusable. Docker aggregate
+health, such as `starting` or `unhealthy`, is recorded separately and does not
+increment a streak. Aegis uses Docker's configured probe, with no separate probe.
+
+Assessment transitions follow these rules:
+
+- A usable success establishes `healthy` unless persistent failure is active.
+- Failures below the failure threshold produce `suspect`. Reaching it produces
+  `persistent failure`.
+- Success after persistent failure produces `recovering` until the recovery
+  threshold. A failure during recovery returns to `persistent failure`.
+- Collection errors, missing checks, non-running lifecycle, stale evidence,
+  unusable timestamps, or excessive gaps produce `unknown` and clear streaks.
+  A prior persistent failure remains unverified. Fresh successes must still meet
+  the recovery threshold.
+
+Evidence and collection time may be at most 60 seconds old by default. Consecutive
+observed check completions may be at most 60 seconds apart. Equality is usable;
+exceeding either limit breaks continuity. These limits allow a 30-second check
+interval plus execution time. Fresh duplicates neither increment nor
+reset a streak. Newly observed checks are processed chronologically, using full
+ID, execution start, and check timestamps for identity. Newly arriving older,
+conflicting, overlapping, or future-dated evidence produces explained `unknown`.
+Docker's bounded log can omit checks. Counts mean consecutive observed outcomes
+within these continuity rules, not proof that every check was captured. Configure
+age and gap to match the application's check interval and inspection cadence.
+
+A new monitor starts with empty state and never restores streaks from SQLite.
+It ignores checks that start before process startup or end at or before startup.
+Replacement, restart, or a policy change also starts fresh and clears any prior
+persistent-failure condition. Evidence gaps establish a new boundary too, while
+preserving that condition. Checks must start at or after the boundary and finish
+after it. This conservative rule waits for a newly started check, even if Docker
+still reports a previous aggregate status. History remains available.
+
+Each monitoring result and its assessment commit in one transaction. Persistence
+failure stops monitoring. Every assessment states: "No recovery action is
+authorized or executed." `recovering` describes successful application checks;
+Aegis has taken no action to cause them. One-off `inspect --save` does not run the
+evaluator. See the [evidence design note](docs/health-assessment-design.md).
 
 ## Run automated checks
 
@@ -202,7 +272,9 @@ bash scripts/smoke-monitor.sh
 This live Docker demonstration starts a uniquely named sandbox and a real Aegis
 process. Another process reads its history, a host marker switches the sandbox
 health check from healthy to unhealthy, and Aegis stops through SIGTERM with exit
-`0`. The script restarts Aegis against the same SQLite file and checks that old
+`0`. It verifies `healthy → suspect → persistent failure → recovering → healthy`
+using distinct checks, confirms unchanged container restart count and execution
+start, then restarts Aegis against the same SQLite file and checks that old
 records remain while new ones are added. Cleanup stops its monitor, removes only
 its Compose project, and deletes its private temporary files.
 
@@ -295,9 +367,9 @@ health data from earlier execution. Inspection shows that data separately from
 lifecycle and explains that it does not establish current availability.
 
 Inspection is a snapshot. State can change immediately afterward. Aegis displays
-age but applies no freshness threshold and runs no independent application probe.
-Saved history records earlier observations, not current health. Monitoring saves
-these snapshots periodically and implements no recovery.
+age but applies no freshness threshold to one-off inspection. Monitoring applies
+the assessment freshness policy above. Saved history records earlier observations,
+not current health. Neither command runs an independent probe or performs recovery.
 
 Aegis displays only allowlisted metadata and its own explanations. It does not
 print environment variables, health-check commands, check output, full inspection

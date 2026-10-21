@@ -98,7 +98,7 @@ func TestUnknownEvidence(t *testing.T) {
 		{"error", "collection_error", func(i *Input) { i.ErrorCategory = "not_found" }},
 		{"missing execution", "missing_identity", func(i *Input) { i.Observation.Evidence.StartedAt = time.Time{} }},
 		{"stale collection", "stale_collection", func(i *Input) { i.CollectedAt = epoch.Add(-time.Minute) }},
-		{"stale check", "stale_check", func(i *Input) { i.Observation.Evidence.Checks = []inspection.Check{check(-40, 1)} }},
+		{"stale check", "stale_check", func(i *Input) { i.Observation.Evidence.Checks = []inspection.Check{check(-41, 1)} }},
 		{"no health check", "no_healthcheck", func(i *Input) { i.Observation.Evidence.Configured = false }},
 		{"empty history", "missing_checks", func(i *Input) { i.Observation.Evidence.Checks = nil }},
 		{"missing end", "unusable_check", func(i *Input) { i.Observation.Evidence.Checks[0].End = time.Time{} }},
@@ -187,5 +187,101 @@ func TestPolicyValidation(t *testing.T) {
 	}
 	if DefaultPolicy().Validate() != nil {
 		t.Fatal("default invalid")
+	}
+}
+
+func TestChronologicalResultsAndCrossResponseOverlap(t *testing.T) {
+	p := DefaultPolicy()
+	in := input(check(3, 1), check(1, 1), check(2, 0))
+	s, a := Evaluate(NewState(epoch, p), in, p, in.CollectedAt)
+	if a.Status != "suspect" || a.Failures != 1 || !s.LastEnd.Equal(check(3, 1).End) {
+		t.Fatal(a)
+	}
+	in = input(check(4, 1))
+	in.Observation.Evidence.Checks[0].Start = check(3, 1).Start
+	_, a = Evaluate(s, in, p, in.CollectedAt)
+	if a.Reason != "overlapping_checks" {
+		t.Fatal(a)
+	}
+}
+
+func TestEveryGapRequiresFreshRecovery(t *testing.T) {
+	for _, kind := range []string{"stale", "gap", "missing", "lifecycle", "out_of_order", "future"} {
+		t.Run(kind, func(t *testing.T) {
+			p := DefaultPolicy()
+			in := input(check(1, 1), check(2, 1), check(3, 1))
+			s, _ := Evaluate(NewState(epoch, p), in, p, in.CollectedAt)
+			switch kind {
+			case "stale":
+				in.CollectedAt = epoch.Add(2 * time.Minute)
+			case "gap":
+				in = input(check(70, 1))
+				in.CollectedAt = epoch.Add(71 * time.Second)
+			case "missing":
+				in.Observation.Evidence.Checks = nil
+			case "lifecycle":
+				in.Observation.Lifecycle = "paused"
+			case "out_of_order":
+				in = input(check(2, 0), check(3, 1))
+			case "future":
+				in = input(check(21, 1))
+			}
+			s, a := Evaluate(s, in, p, in.CollectedAt)
+			if a.Status != "unknown" || !a.Persistent || a.Failures != 0 || a.Successes != 0 {
+				t.Fatal(a)
+			}
+			for j, want := range []string{"recovering", "healthy"} {
+				n := int(s.Boundary.Sub(epoch)/time.Second) + 1 + j
+				in = input(check(n, 0))
+				in.CollectedAt = check(n, 0).End
+				s, a = Evaluate(s, in, p, in.CollectedAt)
+				if a.Status != want {
+					t.Fatalf("after %s: %+v", kind, a)
+				}
+			}
+		})
+	}
+}
+
+func TestSingleCheckThresholdsAndClockRegression(t *testing.T) {
+	p := DefaultPolicy()
+	p.FailureThreshold = 1
+	p.RecoveryThreshold = 1
+	in := input(check(1, 1))
+	s, a := Evaluate(NewState(epoch, p), in, p, in.CollectedAt)
+	if a.Status != "persistent failure" {
+		t.Fatal(a)
+	}
+	in = input(check(2, 0))
+	s, a = Evaluate(s, in, p, in.CollectedAt)
+	if a.Status != "healthy" {
+		t.Fatal(a)
+	}
+	_, a = Evaluate(s, in, p, in.CollectedAt.Add(-time.Second))
+	if a.Reason != "clock_regression" {
+		t.Fatal(a)
+	}
+}
+
+func TestStartupOldHistoryAndNewCheck(t *testing.T) {
+	p := DefaultPolicy()
+	in := input(check(1, 1), check(2, 1), check(3, 1))
+	s, a := Evaluate(NewState(epoch.Add(20*time.Second), p), in, p, in.CollectedAt)
+	if a.Reason != "awaiting_fresh_check" || a.Failures != 0 {
+		t.Fatal(a)
+	}
+	in = input(check(2, 1), check(3, 1), check(21, 1))
+	in.CollectedAt = epoch.Add(22 * time.Second)
+	s, a = Evaluate(s, in, p, in.CollectedAt)
+	if a.Failures != 1 || a.Status != "suspect" {
+		t.Fatal(a)
+	}
+	// Check identity remains recognized even if a later duplicate response omits it.
+	older := input(check(2, 1))
+	older.CollectedAt = in.CollectedAt
+	s, _ = Evaluate(s, older, p, older.CollectedAt)
+	_, a = Evaluate(s, in, p, in.CollectedAt)
+	if a.Status != "suspect" || a.Failures != 1 {
+		t.Fatal(a)
 	}
 }

@@ -29,7 +29,7 @@ PRAGMA user_version=3;
 // SaveMonitoringResult atomically commits exactly one result and its explanation.
 // Assessment summaries survive independent pruning of raw observations.
 func SaveMonitoringResult(ctx context.Context, path, target string, result inspection.Result, cause error, a assessment.Assessment) error {
-	if !inspection.ValidSelector(target) || a.EvaluatedAt.IsZero() {
+	if !inspection.ValidSelector(target) || a.EvaluatedAt.IsZero() || a.CollectedAt.IsZero() {
 		return errors.New("invalid assessment target or time")
 	}
 	if err := a.Policy.Validate(); err != nil {
@@ -44,9 +44,9 @@ func SaveMonitoringResult(ctx context.Context, path, target string, result inspe
 	}
 	return write(ctx, path, func(ctx context.Context, tx *sql.Tx) error {
 		if cause != nil {
-			err = insertCollectionError(ctx, tx, target, a.EvaluatedAt, cause)
+			err = insertCollectionError(ctx, tx, target, a.CollectedAt, cause)
 		} else {
-			err = insertObservation(ctx, tx, result, a.EvaluatedAt)
+			err = insertObservation(ctx, tx, result, a.CollectedAt)
 		}
 		if err != nil {
 			return err

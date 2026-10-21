@@ -37,8 +37,13 @@ func readEvidence(raw json.RawMessage, configured bool) (Evidence, error) {
 			return Evidence{}, err
 		}
 	}
+	evidence.StartedAt = evidence.StartedAt.UTC()
 	if configured && fields.State.Health != nil {
 		evidence.Checks = fields.State.Health.Log
+		for i := range evidence.Checks {
+			evidence.Checks[i].Start = evidence.Checks[i].Start.UTC()
+			evidence.Checks[i].End = evidence.Checks[i].End.UTC()
+		}
 	}
 	return evidence, nil
 }

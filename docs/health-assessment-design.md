@@ -6,7 +6,7 @@ A check belongs to a full container ID and Docker `StartedAt` execution. Its sta
 
 The evaluator receives explicit time, policy, previous state, and an observation or sanitized collection-error category. It processes completed checks by end time, then start time. A high-water mark prevents recounting older checks. The preceding response's identities distinguish overlapping history from newly arriving older evidence. Conflicting, overlapping, future, or newly out-of-order checks produce unknown.
 
-Defaults are 3 failed checks, 2 recovery checks, 30 seconds maximum evidence age, and 30 seconds maximum gap between check completions. All settings must be positive. Age and gap exactly at their limits are usable. Start and end must be present, ordered, no later than collection or evaluation time, and belong to the current execution. Collection time must also be fresh. Only lifecycle `running` can establish application health.
+Defaults are 3 failed checks, 2 recovery checks, 60 seconds maximum evidence age, and 60 seconds maximum gap between check completions. These limits allow a 30-second check interval plus execution time. All settings must be positive. Age and gap exactly at their limits are usable. Start and end must be present, ordered, no later than collection or evaluation time, and belong to the current execution. Collection time must also be fresh. Only lifecycle `running` can establish application health.
 
 Each monitor starts empty with a startup boundary. Checks must start at or after that boundary and complete after it. Replacement, restart, or changed policy starts a fresh state at the current evaluation time. Historical rows never restore streaks. This intentionally waits for a check that starts after the boundary.
 
