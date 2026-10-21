@@ -36,6 +36,7 @@ func ValidID(id string) bool {
 // Result contains only metadata safe to display. Docker health is independent
 // of lifecycle; a stopped container may retain an earlier health result.
 type Result struct {
+	TTY         bool
 	Evidence    Evidence
 	Name        string
 	ID          string
@@ -68,7 +69,7 @@ func Inspect(ctx context.Context, docker *client.Client, selector string) (Resul
 	}
 	result := Result{
 		Name: strings.TrimPrefix(container.Name, "/"), ID: container.ID,
-		Lifecycle: string(state.Status), Health: "unknown",
+		Lifecycle: string(state.Status), Health: "unknown", TTY: container.Config.Tty,
 		Explanation: "No Docker health check is configured; application health is unknown.",
 	}
 	check := container.Config.Healthcheck
