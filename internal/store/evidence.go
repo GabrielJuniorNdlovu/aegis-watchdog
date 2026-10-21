@@ -27,6 +27,7 @@ CREATE TABLE evidence_captures (
  deleting INTEGER NOT NULL DEFAULT 0,
  deleted_at TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX evidence_active ON evidence_captures(deleted_at,action_id);
 CREATE INDEX assessments_evidence ON assessments(container_id,evaluated_at DESC,sequence DESC);
 PRAGMA user_version=6;
 `
@@ -190,7 +191,13 @@ func EvidenceRecords(ctx context.Context, path string, id int64, limit int) ([]C
 	if version < 6 {
 		return nil, nil
 	}
-	rows, err := db.QueryContext(ctx, `SELECT e.action_id,e.status,e.started_at,e.ended_at,substr(CAST(e.input AS BLOB),1,16385),substr(CAST(e.limits AS BLOB),1,1025),substr(e.bundle_name,1,81),e.byte_count,substr(e.digest,1,65),e.truncated,substr(CAST(e.issues AS BLOB),1,2049),e.deleting,e.deleted_at,(r.state IN ('planned','dispatching','verifying') OR (r.state='uncertain' AND r.acknowledged_at IS NULL)) FROM evidence_captures e JOIN reservations r ON r.reservation_id=e.action_id WHERE (e.action_id=? OR (?=0 AND e.deleted_at='')) ORDER BY e.action_id LIMIT ?`, id, id, limit)
+	where := "e.action_id=?"
+	var selector any = id
+	if id == 0 {
+		where = "e.deleted_at=?"
+		selector = ""
+	}
+	rows, err := db.QueryContext(ctx, `SELECT e.action_id,e.status,e.started_at,e.ended_at,substr(CAST(e.input AS BLOB),1,16385),substr(CAST(e.limits AS BLOB),1,1025),substr(e.bundle_name,1,81),e.byte_count,substr(e.digest,1,65),e.truncated,substr(CAST(e.issues AS BLOB),1,2049),e.deleting,e.deleted_at,(r.state IN ('planned','dispatching','verifying') OR (r.state='uncertain' AND r.acknowledged_at IS NULL)) FROM evidence_captures e JOIN reservations r ON r.reservation_id=e.action_id WHERE `+where+` ORDER BY e.action_id LIMIT ?`, selector, limit)
 	if err != nil {
 		return nil, err
 	}

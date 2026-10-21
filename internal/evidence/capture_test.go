@@ -1,6 +1,7 @@
 package evidence
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -194,7 +195,7 @@ func pending(t *testing.T, path string) store.CaptureRecord {
 	return r
 }
 func TestInterruptedAndInvalidPublication(t *testing.T) {
-	for _, stage := range []string{"no_file", "temporary", "bad_version", "wrong_identity", "partial_without_issues", "truncated_json"} {
+	for _, stage := range []string{"no_file", "temporary", "bad_version", "wrong_identity", "partial_without_issues", "truncated_json", "wrong_limits", "wrong_start", "missing_execution", "extra_field", "oversize"} {
 		t.Run(stage, func(t *testing.T) {
 			path := fixture(t)
 			r := pending(t, path)
@@ -210,7 +211,8 @@ func TestInterruptedAndInvalidPublication(t *testing.T) {
 				}
 			}
 			if stage != "no_file" && stage != "temporary" {
-				b := Bundle{SchemaVersion: 1, Input: input(), Limits: DefaultLimits(), StartedAt: at, EndedAt: at, Status: "complete"}
+				execution := &Container{ID: id, Lifecycle: "running", Health: "healthy", StartedAt: at.Add(-time.Hour)}
+				b := Bundle{SchemaVersion: 1, Input: input(), Limits: DefaultLimits(), StartedAt: at, EndedAt: at, Status: "complete", Before: execution, After: execution}
 				switch stage {
 				case "bad_version":
 					b.SchemaVersion = 2
@@ -218,10 +220,22 @@ func TestInterruptedAndInvalidPublication(t *testing.T) {
 					b.Input.ContainerID = strings.Repeat("b", 64)
 				case "partial_without_issues":
 					b.Status = "partial"
+				case "wrong_limits":
+					b.Limits.LogBytes++
+				case "wrong_start":
+					b.StartedAt = at.Add(time.Second)
+				case "missing_execution":
+					b.After = nil
 				}
 				body, _ := json.Marshal(b)
 				if stage == "truncated_json" {
 					body = body[:len(body)/2]
+				}
+				if stage == "extra_field" {
+					body = append(body[:len(body)-1], []byte(`,"Unexpected":true}`)...)
+				}
+				if stage == "oversize" {
+					body = append(body, bytes.Repeat([]byte(" "), int(DefaultLimits().BundleBytes))...)
 				}
 				if err = d.publish(1, body); err != nil {
 					t.Fatal(err)

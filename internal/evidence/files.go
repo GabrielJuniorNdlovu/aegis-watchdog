@@ -152,7 +152,7 @@ func (d *directory) usage() (int64, error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		return 0, err
 	}
-	if len(entries) >= MaxEntries {
+	if len(entries) >= MaxEntries-1 {
 		return 0, errors.New("evidence directory entry limit reached")
 	}
 	var total int64
@@ -164,11 +164,14 @@ func (d *directory) usage() (int64, error) {
 		if !info.Mode().IsRegular() {
 			return 0, errors.New("unexpected non-regular evidence entry")
 		}
+		if info.Size() > 1024*1024*1024-total {
+			return 0, errors.New("evidence storage exceeds the maximum allowance")
+		}
 		total += info.Size()
 	}
 	return total, nil
 }
-func (d *directory) publish(id int64, body []byte) error {
+func (d *directory) publish(id int64, body []byte) (err error) {
 	if err := d.check(); err != nil {
 		return err
 	}
@@ -177,6 +180,12 @@ func (d *directory) publish(id int64, body []byte) error {
 	if err != nil {
 		return err
 	}
+	published := false
+	defer func() {
+		if err != nil && !published {
+			err = errors.Join(err, d.remove(temp))
+		}
+	}()
 	_, writeErr := f.Write(body)
 	if writeErr == nil {
 		writeErr = f.Sync()
@@ -195,6 +204,7 @@ func (d *directory) publish(id int64, body []byte) error {
 	if err = d.root.Link(temp, final); err != nil {
 		return err
 	}
+	published = true
 	if err = d.sync(); err != nil {
 		return err
 	}

@@ -10,10 +10,14 @@ times, effective capture limits, original reservation policy, up to four persist
 assessment summaries, selected lifecycle/start/check times, redacted recent logs,
 and explicit issues and truncation. Environment, inspect bodies, probe commands,
 probe output, operator acknowledgment text, and arbitrary diagnostics are excluded.
-Database payload reads and row counts are bounded before decoding.
+Database payload reads and row counts are bounded before decoding. The copied
+reservation assessment and up to three recent exact-ID assessments are each
+limited to 8 KiB before decoding. Invalid or oversized summaries are omitted
+with an explicit issue. Docker inspect and error responses have a 1 MiB cap
+through the SDK response hook; its normal API-version negotiation is preserved.
 
 Defaults are a 10-second collection deadline, five-minute log lookback, 64 KiB
-Docker log stream read allowance including framing, 512 KiB bundle, 16 MiB total
+Docker log stream read allowance including framing and a 200-line tail, 512 KiB bundle, 16 MiB total
 logical file storage, and seven-day evidence retention. Configuration validates
 JSON's worst-case sixfold escaping plus a 64 KiB metadata reserve. A bounded
 final recording step may take up to five additional seconds after cancellation.
@@ -48,9 +52,26 @@ files are never deleted and count toward the allowance.
 Reservation-associated captures and action audit remain separate. A deletion
 intent is persisted before cleanup unlinks a resolved action's expired bundle;
 its retired timestamp records completion. Startup retries interrupted deletions.
+Retention is measured from capture start. The monitor runs cleanup after its
+first saved observation and at most once per minute, alongside existing pruning.
 Cleanup removes at most 32 expired resolved captures per pass. Unresolved actions
 are always protected. Active registry and directory scans have a fixed 4096-entry
 bound; exceeding it blocks work rather than assuming absent evidence. Storage
 admission reserves a full maximum-size bundle, including the temporary file.
 Temporary and published hard links share the same content during publication.
 No protected evidence is deleted to admit another capture.
+
+Only the journal's known names are eligible for deletion. Files that fail
+identity or integrity validation are retained for operator investigation.
+Filesystem operations use Linux no-follow flags and require local hard-link and
+file/directory fsync support. This is not a hard filesystem quota: accounting
+covers logical bundle and temporary-file bytes, not SQLite history, filesystem
+allocation overhead, or unrelated processes writing concurrently. Dedicated
+0700 ownership and Aegis's existing owner lock serialize its own writers.
+
+Capture entry points live in `internal/evidence`; no CLI capture command or
+monitor capture call is enabled. The [demo](../demo/EVIDENCE.md) uses an opt-in
+test fixture with simulated actions. Action inspection remains read-only and
+never prints full logs. Repeats return the original record, including failed or
+retired records. A recorded complete status describes the configured scope,
+not all possible diagnostic context or successful recovery.

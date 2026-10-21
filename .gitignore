@@ -8,3 +8,5 @@
 *.sqlite3
 *.sqlite3-*
 .aegis-monitor.lock
+**/evidence/capture-*.json
+**/evidence/.capture-*.tmp

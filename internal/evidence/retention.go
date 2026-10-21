@@ -15,11 +15,13 @@ import (
 // CleanupLocked retires at most CleanupBatch resolved captures per pass. It must
 // share the directory ownership lock with capture and action reconciliation.
 func CleanupLocked(ctx context.Context, path string, at time.Time) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, DefaultLimits().Deadline)
+	defer cancel()
 	records, err := store.EvidenceRecords(ctx, path, 0, MaxEntries+1)
 	if err != nil {
 		return 0, err
 	}
-	if len(records) >= MaxEntries {
+	if len(records) > MaxEntries {
 		return 0, errors.New("evidence registry entry limit reached")
 	}
 	if len(records) == 0 {

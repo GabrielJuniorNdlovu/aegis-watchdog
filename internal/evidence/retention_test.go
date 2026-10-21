@@ -197,3 +197,52 @@ func pendingRecord(t *testing.T, path string, id int64) store.CaptureRecord {
 	}
 	return r
 }
+
+func TestOversizedUnknownFileBlocksAdmissionWithoutDeletion(t *testing.T) {
+	path := fixture(t)
+	d, err := openDirectory(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.root.Close()
+	file, err := d.root.OpenFile("unknown-sparse-file", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Truncate(2 * 1024 * 1024 * 1024); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	file.Close()
+	var calls atomic.Int32
+	r, err := Capture(context.Background(), path, 1, normalDocker(t, &calls), DefaultLimits(), func() time.Time { return at })
+	if err == nil || r.Status != "failed" || calls.Load() != 0 {
+		t.Fatal(r, err, calls.Load())
+	}
+	if info, err := d.root.Stat("unknown-sparse-file"); err != nil || info.Size() != 2*1024*1024*1024 {
+		t.Fatal("unknown file changed", err)
+	}
+}
+
+func TestFullRegistryBlocksCaptureButAllowsBoundedCleanup(t *testing.T) {
+	path := fixture(t)
+	execSQL(t, path, `UPDATE reservations SET state='canceled';
+ WITH RECURSIVE ids(n) AS (SELECT 2 UNION ALL SELECT n+1 FROM ids WHERE n<4097)
+ INSERT INTO reservations(reservation_id,service_id,container_id,reserved_at,state,max_attempts,window_ns,cooldown_ns)
+ SELECT n,service_id,container_id,reserved_at,'canceled',max_attempts,window_ns,cooldown_ns FROM ids CROSS JOIN reservations WHERE reservation_id=1`)
+	r := pendingRecord(t, path, 1)
+	r.Status = "failed"
+	r.EndedAt = at
+	if err := store.UpdateEvidence(context.Background(), path, r); err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, path, `INSERT INTO evidence_captures(action_id,status,started_at,ended_at,input,limits)
+ SELECT reservation_id,'failed',?, ?,json_set(?,'$.ActionID',reservation_id),? FROM reservations WHERE reservation_id BETWEEN 2 AND 4096`, at.Format("2006-01-02T15:04:05.000000000Z"), at.Format("2006-01-02T15:04:05.000000000Z"), r.Input, r.Limits)
+	var calls atomic.Int32
+	if _, err := Capture(context.Background(), path, 4097, normalDocker(t, &calls), DefaultLimits(), func() time.Time { return at }); err == nil || !strings.Contains(err.Error(), "registry entry limit") || calls.Load() != 0 {
+		t.Fatal("full registry admitted capture", err, calls.Load())
+	}
+	if count := cleanup(t, path, at.Add(8*24*time.Hour)); count != CleanupBatch {
+		t.Fatal("full registry prevented cleanup", count)
+	}
+}

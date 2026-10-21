@@ -1,0 +1,10 @@
+services:
+  healthy:
+    command:
+      - sh
+      - -c
+      - |
+        printf '%s\n' 'synthetic evidence demo' 'Authorization: Bearer DEMO_AUTH_SECRET' 'token=DEMO_TOKEN_SECRET password=DEMO_PASSWORD_SECRET'
+        while :; do sleep 3600; done
+    environment:
+      DEMO_ONLY_SECRET: DEMO_ENV_SECRET

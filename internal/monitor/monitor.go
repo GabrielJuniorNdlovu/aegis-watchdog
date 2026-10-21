@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/evidence"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 	"github.com/moby/moby/client"
@@ -76,6 +77,9 @@ func loop(ctx context.Context, config Config, collect func(context.Context) (ins
 		return err
 	}
 	defer lock.Close()
+	if err := evidence.ReconcileLocked(ctx, config.DBPath, now()); err != nil {
+		return persistenceError(ctx, fmt.Errorf("evidence reconciliation failed: %w", err))
+	}
 	policy := config.Policy
 	state := assessment.NewState(now(), policy)
 	var lastPrune time.Time
@@ -118,6 +122,9 @@ func loop(ctx context.Context, config Config, collect func(context.Context) (ins
 		if lastPrune.IsZero() || pruneAt.Sub(lastPrune) >= PruneInterval {
 			if _, err := store.Prune(ctx, config.DBPath, pruneAt.Add(-config.Retention)); err != nil {
 				return persistenceError(ctx, fmt.Errorf("retention pruning failed: %w", err))
+			}
+			if _, err := evidence.CleanupLocked(ctx, config.DBPath, pruneAt); err != nil {
+				return persistenceError(ctx, fmt.Errorf("evidence retention failed: %w", err))
 			}
 			lastPrune = pruneAt
 		}

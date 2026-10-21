@@ -40,6 +40,13 @@ func Capture(ctx context.Context, path string, id int64, docker *DockerClient, p
 	if len(existing) > 0 {
 		return existing[0], nil
 	}
+	active, err := store.EvidenceRecords(ctx, path, 0, MaxEntries+1)
+	if err != nil {
+		return r, err
+	}
+	if len(active) >= MaxEntries {
+		return r, errors.New("evidence registry entry limit reached; resolve and retire old captures first")
+	}
 	reservation, assessments, missing, err := store.EvidenceInput(ctx, path, id)
 	if err != nil {
 		return r, err
@@ -136,6 +143,8 @@ func publishedRecord(r store.CaptureRecord, b Bundle, body []byte) store.Capture
 // ReconcileLocked runs under the existing data-directory owner lock. It has no
 // Docker dependency and never modifies reservations or action audit history.
 func ReconcileLocked(ctx context.Context, path string, at time.Time) error {
+	ctx, cancel := context.WithTimeout(ctx, DefaultLimits().Deadline)
+	defer cancel()
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return nil
 	} else if err != nil {
@@ -145,7 +154,7 @@ func ReconcileLocked(ctx context.Context, path string, at time.Time) error {
 	if err != nil {
 		return err
 	}
-	if len(records) >= MaxEntries {
+	if len(records) > MaxEntries {
 		return errors.New("evidence registry entry limit reached")
 	}
 	if len(records) == 0 {
@@ -179,6 +188,9 @@ func ReconcileLocked(ctx context.Context, path string, at time.Time) error {
 		}
 		if validationErr == nil {
 			if r.Status == "pending" {
+				if err = d.sync(); err != nil {
+					return err
+				}
 				r = publishedRecord(r, b, body)
 				if err = store.UpdateEvidence(ctx, path, r); err != nil {
 					return err
