@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -20,7 +21,7 @@ const (
 	DefaultPath   = "data/aegis.db"
 	DefaultLimit  = 20
 	MaxLimit      = 1000
-	schemaVersion = 2
+	schemaVersion = 3
 	// Fixed-width UTC text sorts chronologically, including fractional seconds.
 	timestampLayout = "2006-01-02T15:04:05.000000000Z"
 )
@@ -55,6 +56,7 @@ PRAGMA user_version = 1;
 
 // Observation contains saved facts, not a claim about current health.
 type Observation struct {
+	Evidence    *inspection.Evidence
 	ContainerID string
 	Name        string
 	ObservedAt  time.Time
@@ -77,18 +79,27 @@ func Save(ctx context.Context, path string, result inspection.Result, observedAt
 		return errors.New("invalid observation identity or timestamp")
 	}
 	return write(ctx, path, func(ctx context.Context, tx *sql.Tx) error {
-		var checkTime any
-		if !result.CheckTime.IsZero() {
-			checkTime = result.CheckTime.UTC().Format(timestampLayout)
-		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO observations
-        (container_id, container_name, observed_at, lifecycle, health, check_time)
-        VALUES (?, ?, ?, ?, ?, ?)`, result.ID, result.Name, observedAt.UTC().Format(timestampLayout), result.Lifecycle, result.Health, checkTime)
-		if err != nil {
-			return fmt.Errorf("insert observation: %w", err)
-		}
-		return nil
+		return insertObservation(ctx, tx, result, observedAt)
 	})
+}
+
+func insertObservation(ctx context.Context, tx *sql.Tx, result inspection.Result, at time.Time) error {
+	if !inspection.ValidID(result.ID) || !inspection.ValidSelector(result.Name) || at.IsZero() {
+		return errors.New("invalid observation identity or timestamp")
+	}
+	var checkTime any
+	if !result.CheckTime.IsZero() {
+		checkTime = result.CheckTime.UTC().Format(timestampLayout)
+	}
+	evidence, err := json.Marshal(result.Evidence)
+	if err != nil {
+		return fmt.Errorf("encode observation evidence: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO observations (container_id, container_name, observed_at, lifecycle, health, check_time, evidence) VALUES (?, ?, ?, ?, ?, ?, ?)`, result.ID, result.Name, at.UTC().Format(timestampLayout), result.Lifecycle, result.Health, checkTime, string(evidence))
+	if err != nil {
+		return fmt.Errorf("insert observation: %w", err)
+	}
+	return nil
 }
 
 func write(ctx context.Context, path string, operation func(context.Context, *sql.Tx) error) error {
@@ -129,6 +140,11 @@ func write(ctx context.Context, path string, operation func(context.Context, *sq
 			return fmt.Errorf("migrate SQLite collection errors: %w", err)
 		}
 	}
+	if version < 3 {
+		if _, err := tx.ExecContext(ctx, schemaV3); err != nil {
+			return fmt.Errorf("migrate SQLite assessments: %w", err)
+		}
+	}
 	if err := operation(ctx, tx); err != nil {
 		return err
 	}
@@ -160,7 +176,11 @@ func History(ctx context.Context, path, containerID string, limit int) ([]Observ
 	if version < 1 || version > schemaVersion {
 		return nil, versionError(version)
 	}
-	rows, err := db.QueryContext(ctx, `SELECT container_id, container_name, observed_at, lifecycle, health, check_time
+	evidenceColumn := "NULL"
+	if version >= 3 {
+		evidenceColumn = "evidence"
+	}
+	rows, err := db.QueryContext(ctx, `SELECT container_id, container_name, observed_at, lifecycle, health, check_time, `+evidenceColumn+`
         FROM observations WHERE container_id = ? ORDER BY observed_at DESC, sequence DESC LIMIT ?`, containerID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("read observation history: %w", err)
@@ -170,8 +190,8 @@ func History(ctx context.Context, path, containerID string, limit int) ([]Observ
 	for rows.Next() {
 		var observation Observation
 		var observed string
-		var check sql.NullString
-		if err := rows.Scan(&observation.ContainerID, &observation.Name, &observed, &observation.Lifecycle, &observation.Health, &check); err != nil {
+		var check, evidence sql.NullString
+		if err := rows.Scan(&observation.ContainerID, &observation.Name, &observed, &observation.Lifecycle, &observation.Health, &check, &evidence); err != nil {
 			return nil, fmt.Errorf("read observation: %w", err)
 		}
 		observation.ObservedAt, err = time.Parse(timestampLayout, observed)
@@ -182,6 +202,12 @@ func History(ctx context.Context, path, containerID string, limit int) ([]Observ
 			observation.CheckTime, err = time.Parse(timestampLayout, check.String)
 			if err != nil {
 				return nil, errors.New("database contains an invalid health-check timestamp")
+			}
+		}
+		if evidence.Valid {
+			observation.Evidence = &inspection.Evidence{}
+			if err := json.Unmarshal([]byte(evidence.String), observation.Evidence); err != nil {
+				return nil, errors.New("database contains invalid check evidence")
 			}
 		}
 		if !inspection.ValidSelector(observation.Name) {

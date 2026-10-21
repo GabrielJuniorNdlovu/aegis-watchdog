@@ -143,6 +143,7 @@ func TestBoundariesAndReset(t *testing.T) {
 		t.Fatal(a)
 	}
 	// Gap is inclusive; a larger interval invalidates continuity.
+	p.MaxAge = 20 * time.Second
 	s = NewState(epoch, p)
 	in = input(check(1, 1), check(11, 1))
 	in.CollectedAt = epoch.Add(12 * time.Second)

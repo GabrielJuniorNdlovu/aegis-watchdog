@@ -21,14 +21,16 @@ func SaveCollectionError(ctx context.Context, path, target string, at time.Time,
 	if !inspection.ValidSelector(target) || at.IsZero() || cause == nil {
 		return errors.New("invalid collection error")
 	}
+	return write(ctx, path, func(ctx context.Context, tx *sql.Tx) error { return insertCollectionError(ctx, tx, target, at, cause) })
+}
+
+func insertCollectionError(ctx context.Context, tx *sql.Tx, target string, at time.Time, cause error) error {
 	category, explanation := inspection.FailureDetails(cause)
-	return write(ctx, path, func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO collection_errors (target, collected_at, category, explanation) VALUES (?, ?, ?, ?)`, target, at.UTC().Format(timestampLayout), category, explanation)
-		if err != nil {
-			return fmt.Errorf("insert collection error: %w", err)
-		}
-		return nil
-	})
+	_, err := tx.ExecContext(ctx, `INSERT INTO collection_errors (target,collected_at,category,explanation) VALUES (?,?,?,?)`, target, at.UTC().Format(timestampLayout), category, explanation)
+	if err != nil {
+		return fmt.Errorf("insert collection error: %w", err)
+	}
+	return nil
 }
 
 // ErrorHistory filters by the exact requested target; it does not invent a Docker ID.

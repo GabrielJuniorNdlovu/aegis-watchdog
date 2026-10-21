@@ -50,20 +50,22 @@ type Input struct {
 }
 
 type Assessment struct {
-	EvaluatedAt     time.Time
-	ContainerID     string
-	StartedAt       time.Time
-	Lifecycle       string
-	AggregateHealth string
-	Status          string
-	Reason          string
-	Explanation     string
-	Failures        int
-	Successes       int
-	Persistent      bool
-	EvidenceStart   time.Time
-	EvidenceEnd     time.Time
-	Policy          Policy
+	Boundary         time.Time
+	EvidenceExitCode *int
+	EvaluatedAt      time.Time
+	ContainerID      string
+	StartedAt        time.Time
+	Lifecycle        string
+	AggregateHealth  string
+	Status           string
+	Reason           string
+	Explanation      string
+	Failures         int
+	Successes        int
+	Persistent       bool
+	EvidenceStart    time.Time
+	EvidenceEnd      time.Time
+	Policy           Policy
 }
 
 // NewState deliberately restores no persisted streaks or pre-start checks.
@@ -88,7 +90,26 @@ func Evaluate(previous State, in Input, policy Policy, now time.Time) (State, As
 		s.Status, s.EvaluatedAt = status, now
 		a.Status, a.Reason = status, reason
 		a.Failures, a.Successes, a.Persistent = s.Failures, s.Successes, s.Persistent
-		a.EvidenceStart, a.EvidenceEnd = s.LastStart, s.LastEnd
+		a.Boundary = s.Boundary
+		if !s.LastEnd.IsZero() {
+			a.EvidenceStart, a.EvidenceEnd = s.LastStart, s.LastEnd
+		} else if in.ErrorCategory == "" {
+			for _, c := range r.Evidence.Checks {
+				if c.End.After(a.EvidenceEnd) {
+					a.EvidenceStart, a.EvidenceEnd, a.EvidenceExitCode = c.Start, c.End, c.ExitCode
+				}
+			}
+		}
+		if !s.LastEnd.IsZero() {
+			exit := s.LastExit
+			a.EvidenceExitCode = &exit
+		}
+		if a.Lifecycle != "" {
+			message = fmt.Sprintf("Lifecycle %s; Docker aggregate health %s. %s", a.Lifecycle, a.AggregateHealth, message)
+		}
+		if status == "unknown" && s.Persistent {
+			message += " Previous persistent failure remains unverified; fresh successes must satisfy the recovery threshold."
+		}
 		a.Explanation = message + " " + NoAction
 		return s, a
 	}
@@ -181,6 +202,9 @@ func Evaluate(previous State, in Input, policy Policy, now time.Time) (State, As
 		if c.Start.Before(s.StartedAt) || c.Start.Before(s.Boundary) || !c.End.After(s.Boundary) || !c.End.After(s.LastEnd) {
 			continue
 		}
+		if now.Sub(c.End) > policy.MaxAge {
+			return unknown("stale_check", "A newly observed completed check exceeds the maximum evidence age.")
+		}
 		if !s.LastEnd.IsZero() && c.End.Sub(s.LastEnd) > policy.MaxGap {
 			return unknown("check_gap", "The gap between observed checks exceeds the maximum; missing outcomes are not inferred.")
 		}
@@ -226,5 +250,5 @@ func Evaluate(previous State, in Input, policy Policy, now time.Time) (State, As
 		return finish(s.Status, "duplicate_check", "No new distinct check; fresh duplicate evidence leaves counts unchanged.")
 	}
 	return finish(s.Status, "check_"+map[string]string{"healthy": "success", "suspect": "failure", "persistent failure": "persistent_failure", "recovering": "recovery"}[s.Status],
-		fmt.Sprintf("Lifecycle %s; Docker aggregate health %s. Consecutive observed checks: %d failed, %d successful; thresholds %d and %d. Docker history is bounded; unobserved checks are not inferred.", r.Lifecycle, r.Health, s.Failures, s.Successes, policy.FailureThreshold, policy.RecoveryThreshold))
+		fmt.Sprintf("Consecutive observed checks: %d failed, %d successful; thresholds %d and %d. Docker history is bounded; unobserved checks are not inferred.", s.Failures, s.Successes, policy.FailureThreshold, policy.RecoveryThreshold))
 }
