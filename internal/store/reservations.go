@@ -77,6 +77,15 @@ func reserve(ctx context.Context, path string, p Proposal, now time.Time) (Reser
 			facts.CoverageStart = now.Add(-p.Policy.Window)
 		}
 		outcome.Decision = budget.Evaluate(facts, p.Policy, now)
+		var unfinished int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM reservations WHERE state IN ('planned','dispatching','verifying')`).Scan(&unfinished); err != nil {
+			return err
+		}
+		if unfinished > 0 && !outcome.Decision.ClockUnsafe {
+			outcome.Decision.Available = false
+			outcome.Decision.Reason = "startup_reconciliation_required"
+			outcome.Decision.Explanation = "Unfinished actions require startup reconciliation before another reservation can be accepted."
+		}
 		high := now
 		for _, at := range []time.Time{facts.HighWater, facts.LatestHostReservation} {
 			if at.After(high) {

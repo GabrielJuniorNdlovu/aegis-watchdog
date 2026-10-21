@@ -306,3 +306,38 @@ func TestReconciliationCannotOverwriteNewerOutcome(t *testing.T) {
 		t.Fatal(h)
 	}
 }
+
+func TestReservationsRequireSuccessfulStartupReconciliation(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "gate.db")
+	p := proposal()
+	accept(t, path, p, testTime)
+	blocked, err := Reserve(ctx, path, p, testTime.Add(time.Minute))
+	if err != nil || blocked.Decision.Reason != "startup_reconciliation_required" {
+		t.Fatal(blocked, err)
+	}
+	db, err := open(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER fail_gate_audit BEFORE INSERT ON action_audit BEGIN SELECT RAISE(ABORT,'injected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if lock, err := ReconcileStartup(ctx, path, nil, func() time.Time { return testTime.Add(2 * time.Minute) }); err == nil || lock != nil {
+		t.Fatal(lock, err)
+	}
+	blocked, err = Reserve(ctx, path, p, testTime.Add(2*time.Minute))
+	if err != nil || blocked.Decision.Reason != "startup_reconciliation_required" {
+		t.Fatal(blocked, err)
+	}
+	if _, err := db.Exec("DROP TRIGGER fail_gate_audit"); err != nil {
+		t.Fatal(err)
+	}
+	startup(t, path, nil, testTime.Add(3*time.Minute))
+	h := inspect(t, path, p, testTime.Add(3*time.Minute))
+	if h.Decision.Attempts != 1 || h.Decision.Reason != "cooldown" {
+		t.Fatal(h)
+	}
+	accept(t, path, p, testTime.Add(p.Policy.Cooldown))
+}

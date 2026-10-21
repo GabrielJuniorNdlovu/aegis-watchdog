@@ -61,7 +61,7 @@ func TestReservationFirstPersistenceAndHostBlocking(t *testing.T) {
 	// A different service is blocked even after the old budget and cooldown expire.
 	p.ServiceID = "unrelated"
 	out, err := Reserve(context.Background(), path, p, testTime.Add(24*time.Hour))
-	if err != nil || out.Reservation != nil || out.Decision.Reason != "unresolved_action" {
+	if err != nil || out.Reservation != nil || out.Decision.Reason != "startup_reconciliation_required" {
 		t.Fatal(out, err)
 	}
 	h = inspect(t, path, p, testTime.Add(24*time.Hour))
@@ -187,7 +187,7 @@ func TestConcurrentSQLiteReservations(t *testing.T) {
 	for r := range out {
 		if r.Reservation != nil {
 			accepted++
-		} else if r.Decision.Reason != "unresolved_action" {
+		} else if r.Decision.Reason != "startup_reconciliation_required" {
 			t.Fatal(r)
 		}
 	}

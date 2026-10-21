@@ -72,7 +72,7 @@ func TestImmediateCollectionAndCompletionScheduling(t *testing.T) {
 		current = current.Add(d)
 		return nil
 	}
-	if err := loop(ctx, cfg, collect, func() time.Time { return current }, wait, io.Discard, io.Discard); err != nil {
+	if err := loop(ctx, cfg, collect, nil, func() time.Time { return current }, wait, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if collections != 3 || waits != 3 {
@@ -112,7 +112,7 @@ func TestCollectionErrorContinuesAtCadence(t *testing.T) {
 		return nil
 	}
 	var out, errOut bytes.Buffer
-	if err := loop(ctx, cfg, collect, func() time.Time { return at }, wait, &out, &errOut); err != nil {
+	if err := loop(ctx, cfg, collect, nil, func() time.Time { return at }, wait, &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
 	failures, err := store.ErrorHistory(context.Background(), cfg.DBPath, "demo", 20)
@@ -144,8 +144,8 @@ func TestPersistenceFailureIsFatal(t *testing.T) {
 				return observation(), nil
 			}
 			wait := func(context.Context, time.Duration) error { t.Fatal("scheduled after persistence failure"); return nil }
-			err := loop(context.Background(), cfg, collect, func() time.Time { return at }, wait, io.Discard, io.Discard)
-			if err == nil || !strings.Contains(err.Error(), "cannot persist history") || calls != 1 {
+			err := loop(context.Background(), cfg, collect, nil, func() time.Time { return at }, wait, io.Discard, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), "startup reconciliation failed") || calls != 0 {
 				t.Fatalf("calls=%d err=%v", calls, err)
 			}
 			lock, err := ownership.Acquire(cfg.DBPath)
@@ -161,7 +161,7 @@ func TestCanceledCollectionDoesNotSaveAnError(t *testing.T) {
 	cfg := config(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	collect := func(context.Context) (inspection.Result, error) { cancel(); return inspection.Result{}, ctx.Err() }
-	if err := loop(ctx, cfg, collect, time.Now, waitInterval, io.Discard, io.Discard); err != nil {
+	if err := loop(ctx, cfg, collect, nil, time.Now, waitInterval, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(cfg.DBPath); !os.IsNotExist(err) {

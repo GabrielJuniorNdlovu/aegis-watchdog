@@ -56,7 +56,7 @@ func TestRetentionCadenceWithExplicitTimes(t *testing.T) {
 		}
 		return nil
 	}
-	if err := loop(ctx, cfg, collect, func() time.Time { return current }, wait, io.Discard, io.Discard); err != nil {
+	if err := loop(ctx, cfg, collect, nil, func() time.Time { return current }, wait, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 }
