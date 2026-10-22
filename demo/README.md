@@ -101,3 +101,67 @@ lock. No unrelated containers are removed, and no prune command is used.
 
 To run the same scenario automatically with complete cleanup of its private
 files, use `bash scripts/smoke-monitor.sh`.
+
+## Run the controlled-recovery smoke test
+
+This separate test creates only containers in a unique Compose project and uses
+a private database under `data/`. It exercises a brief fault, one restart followed
+by sustained checks, a persistent external fault that consumes the budget, record
+mode against that same fault, and controller interruption during verification.
+The test removes only that project's containers and temporary directory on exit.
+
+```sh
+bash scripts/smoke-recovery.sh
+```
+
+The script explicitly enables recovery only for its demo app with local-liveness
+and restart-appropriate declarations. The Compose workloads use restart policy
+`no`, no network, and bounded CPU, memory, and process counts. It never targets
+the monitor demo database or unrelated containers. If stopped unexpectedly,
+remove only the exact Compose project created by the script; do not use Docker
+prune commands.
+
+For a manual recovery run, build Aegis, create the external persistent-fault
+control, and start only the self-healing workload:
+
+```sh
+CGO_ENABLED=1 go build -o bin/aegis ./cmd/aegis
+export DOCKER_HOST="$(docker context inspect --format '{{.Endpoints.docker.Host}}')"
+export AEGIS_RECOVERY_CONTROL_DIR="$PWD/data/recovery-demo-control"
+mkdir -p data/recovery-demo
+mkdir -p "$AEGIS_RECOVERY_CONTROL_DIR"
+chmod 755 "$AEGIS_RECOVERY_CONTROL_DIR"
+docker compose -f demo/recovery.compose.yaml -p aegis-recovery-demo up -d self-healing
+container_id="$(docker compose -f demo/recovery.compose.yaml -p aegis-recovery-demo ps -q self-healing)"
+./bin/aegis monitor --container "$container_id" --interval 200ms --db data/recovery-demo/history.db \
+  --enable-recovery --service demo-self-healing \
+  --healthcheck-local-liveness --restart-appropriate
+```
+
+After Aegis reports a persistent failure, it should reserve one attempt, capture
+evidence, restart this exact demo container, and verify two distinct successful
+checks. In a second terminal, read the action and confirm the new execution start time:
+
+```sh
+./bin/aegis actions --id 1 --db data/recovery-demo/history.db
+docker inspect --format '{{.State.StartedAt}}' "$container_id"
+```
+
+To try record-only mode on the persistent fixture, create the marker first and
+omit all recovery flags:
+
+```sh
+touch "$AEGIS_RECOVERY_CONTROL_DIR/fault"
+docker compose -f demo/recovery.compose.yaml -p aegis-recovery-demo up -d persistent
+persistent_id="$(docker compose -f demo/recovery.compose.yaml -p aegis-recovery-demo ps -q persistent)"
+./bin/aegis monitor --container "$persistent_id" --interval 200ms --db data/recovery-demo/record.db
+```
+
+Stop Aegis with Ctrl+C before cleanup. Remove only the demo project and its
+private data directory:
+
+```sh
+docker compose -f demo/recovery.compose.yaml -p aegis-recovery-demo down --timeout 5 --remove-orphans
+rm -f -- data/recovery-demo/history.db data/recovery-demo/record.db data/recovery-demo-control/fault
+rmdir -- data/recovery-demo data/recovery-demo-control
+```
