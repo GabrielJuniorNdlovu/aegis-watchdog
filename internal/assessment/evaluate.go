@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/dependency"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 )
 
@@ -68,6 +69,7 @@ type Assessment struct {
 	EvidenceStart           time.Time
 	EvidenceEnd             time.Time
 	Policy                  Policy
+	DependencyGate          *dependency.Report `json:"dependency_gate,omitempty"`
 }
 
 // NewState deliberately restores no persisted streaks or pre-start checks.

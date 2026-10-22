@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/dependency"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/evidence"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/recovery"
@@ -24,13 +25,13 @@ const (
 )
 
 type Config struct {
-	Policy       assessment.Policy
-	Target       string
-	DBPath       string
-	Interval     time.Duration
-	Retention    time.Duration
-	Recovery     recovery.Config
-	Dependencies []string
+	Policy          assessment.Policy
+	Target          string
+	DBPath          string
+	Interval        time.Duration
+	Retention       time.Duration
+	Recovery        recovery.Config
+	ServiceManifest *dependency.Manifest
 }
 
 func (c Config) Validate() error {
@@ -52,8 +53,13 @@ func (c Config) Validate() error {
 	if err := c.Recovery.Validate(); err != nil {
 		return err
 	}
-	if len(c.Dependencies) > 0 {
-		return errors.New("dependency recovery gates are not implemented")
+	if c.ServiceManifest != nil {
+		if !c.Recovery.Enabled {
+			return errors.New("service dependency gates require explicitly enabled recovery")
+		}
+		if err := c.ServiceManifest.ValidateTarget(c.Recovery.Service, c.Target); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -73,9 +79,9 @@ func Run(ctx context.Context, docker *client.Client, config Config, stdout, stde
 		}
 		defer recoveryClient.Close()
 	}
-	return loopRecovery(ctx, config, collect, func(ctx context.Context, id string) (inspection.Result, error) {
+	return loopConfigured(ctx, config, collect, func(ctx context.Context, id string) (inspection.Result, error) {
 		return inspection.Inspect(ctx, docker, id)
-	}, recoveryClient, time.Now, waitInterval, stdout, stderr)
+	}, recoveryClient, recoveryClient, time.Now, waitInterval, stdout, stderr)
 }
 
 // collect, now, and wait are small seams for deterministic scheduling tests.
@@ -85,11 +91,18 @@ func loop(ctx context.Context, config Config, collect func(context.Context) (ins
 }
 
 func loopRecovery(ctx context.Context, config Config, collect func(context.Context) (inspection.Result, error), inspectExact func(context.Context, string) (inspection.Result, error), recoveryClient *evidence.DockerClient, now func() time.Time, wait func(context.Context, time.Duration) error, stdout, stderr io.Writer) error {
+	return loopConfigured(ctx, config, collect, inspectExact, recoveryClient, nil, now, wait, stdout, stderr)
+}
+
+func loopConfigured(ctx context.Context, config Config, collect func(context.Context) (inspection.Result, error), inspectExact func(context.Context, string) (inspection.Result, error), recoveryClient *evidence.DockerClient, dependencyInspector dependency.Inspector, now func() time.Time, wait func(context.Context, time.Duration) error, stdout, stderr io.Writer) error {
 	if err := config.Validate(); err != nil {
 		return err
 	}
 	if config.Recovery.Enabled && recoveryClient == nil {
 		return errors.New("recovery enabled without a recovery Docker client")
+	}
+	if config.ServiceManifest != nil && dependencyInspector == nil {
+		return errors.New("service manifest configured without a dependency inspector")
 	}
 	if ctx.Err() != nil {
 		return nil
@@ -114,15 +127,35 @@ func loopRecovery(ctx context.Context, config Config, collect func(context.Conte
 			return nil
 		}
 		result, collectionErr := collect(ctx)
-		at := now().UTC()
+		collectedAt := now().UTC()
 		if ctx.Err() != nil {
 			return nil
 		}
+		var gateReport *dependency.Report
+		if config.ServiceManifest != nil {
+			service, _ := config.ServiceManifest.Service(config.Recovery.Service)
+			if len(service.Dependencies) > 0 {
+				var targetObservation *dependency.Observation
+				if collectionErr == nil {
+					observed := dependency.FromResult(config.Recovery.Service, config.Target, result, nil, collectedAt)
+					targetObservation = &observed
+				}
+				observations := dependency.Collect(ctx, *config.ServiceManifest, config.Recovery.Service, dependencyInspector, targetObservation, now)
+				at := now().UTC()
+				report := dependency.Evaluate(*config.ServiceManifest, config.Recovery.Service, observations, nil, at, policy.MaxAge)
+				gateReport = &report
+			}
+		}
+		at := now().UTC()
 		category := ""
 		if collectionErr != nil {
 			category, _ = inspection.FailureDetails(collectionErr)
 		}
-		next, evaluated := assessment.Evaluate(state, assessment.Input{Observation: result, CollectedAt: at, ErrorCategory: category}, policy, at)
+		next, evaluated := assessment.Evaluate(state, assessment.Input{Observation: result, CollectedAt: collectedAt, ErrorCategory: category}, policy, at)
+		if gateReport != nil {
+			evaluated.DependencyGate = gateReport
+			evaluated.Explanation += " " + gateReport.Summary()
+		}
 		if err := store.SaveMonitoringResult(ctx, config.DBPath, config.Target, result, collectionErr, evaluated); err != nil {
 			return persistenceError(ctx, err)
 		}
@@ -143,7 +176,14 @@ func loopRecovery(ctx context.Context, config Config, collect func(context.Conte
 		}
 		if verification == nil && config.Recovery.Enabled && collectionErr == nil {
 			var message string
-			verification, message, err = recovery.Consider(ctx, config.Recovery, config.DBPath, recoveryClient, recoveryClient, evaluated, result, at)
+			capture := func(ctx context.Context, path string, id int64) (string, error) {
+				captured, err := evidence.CaptureLocked(ctx, path, id, recoveryClient, evidence.DefaultLimits(), time.Now)
+				if len(captured.Issues) > 0 {
+					return captured.Issues[0], err
+				}
+				return "", err
+			}
+			verification, message, err = recovery.Consider(ctx, config.Recovery, config.DBPath, recoveryClient, capture, evaluated, result, at, config.ServiceManifest, gateReport, now)
 			if err != nil {
 				return persistenceError(ctx, fmt.Errorf("coordinate recovery: %w", err))
 			}
@@ -159,7 +199,11 @@ func loopRecovery(ctx context.Context, config Config, collect func(context.Conte
 				return fmt.Errorf("write monitor error output: %w", err)
 			}
 		} else {
-			if _, err := fmt.Fprintf(stdout, "Observed at: %s\n%s", at.Format(time.RFC3339Nano), result.Text(at)); err != nil {
+			resultText := result.Text(at)
+			if gateReport != nil && !gateReport.Passed {
+				resultText = strings.Replace(resultText, "Action: none — inspection only.", "Action: none — dependency gate blocked recovery.", 1)
+			}
+			if _, err := fmt.Fprintf(stdout, "Observed at: %s\n%s", at.Format(time.RFC3339Nano), resultText); err != nil {
 				return fmt.Errorf("write monitor output: %w", err)
 			}
 		}

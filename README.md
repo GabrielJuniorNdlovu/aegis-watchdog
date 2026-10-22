@@ -567,10 +567,50 @@ must represent local liveness; aggregate readiness checks are not suitable.
 
 Recovery accepts only Docker restart policy `no` (an omitted Docker value is its
 `no` default). Policies `always`, `on-failure`, and `unless-stopped` are rejected
-because they compete with Aegis. Dependency gates are not implemented; passing
-`--dependency` fails configuration validation before Docker is contacted. The
-demo database and other services are never selected by this single-container
-monitor.
+because they compete with Aegis. Optional dependency gates use a restart-only
+JSON manifest loaded with `--service-config`:
+
+```json
+{
+  "services": [
+    {"id": "api", "container": "api", "dependencies": ["database"]},
+    {"id": "database", "container": "db"}
+  ]
+}
+```
+
+Every service ID and dependency reference must be valid and unique. Unknown
+references, duplicate IDs or edges, self-dependencies, and cycles fail before
+Docker is contacted. The selected service must be present, and its manifest
+container selector must match `--container`. A dependency entry grants no restart
+permission; only the explicitly selected service can be restarted by this run.
+
+```sh
+./bin/aegis monitor --container api --db data/aegis.db \
+  --enable-recovery --service api --service-config data/services.json \
+  --healthcheck-local-liveness --restart-appropriate
+```
+
+A dependency gate passes only if its direct dependency resolves to a running
+container with a configured health check, a current execution identity, and a
+fresh healthy check. Freshness uses the underlying health-check completion time,
+not the time Aegis inspected Docker. A check exactly one minute old is fresh by
+default; future timestamps are rejected. Unknown health, missing checks, absent
+or ambiguous containers, collection errors, stale evidence, and non-running
+lifecycle states block recovery. Assessments persist the gate outcome, ordered
+reason codes, service/container IDs, execution and check timestamps, evaluation
+time, and policy.
+
+Only explicitly listed direct dependencies are evaluated. A healthy dependency
+is not recursively blocked because one of its own dependencies is unhealthy, and
+an unhealthy dependency is not evidence that it caused the application failure.
+The gate runs before reservation and again after evidence capture immediately
+before dispatch. The first block consumes no budget; a later block cancels the
+planned action while retaining its reservation and evidence. Checks run serially,
+with duplicate selectors inspected once, and are bounded to 32 services and 8
+direct dependencies. Dependency changes after dispatch do not cancel verification
+or create another action. A dependency can still change after the last inspection;
+Docker inspection and restart dispatch cannot be atomic.
 
 The default policy needs three distinct fresh failed checks, observes a 20-second
 startup grace, allows a 10-second graceful stop within a 30-second request

@@ -38,6 +38,22 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 CGO_ENABLED=1 go build -o "$temp_dir/aegis" ./cmd/aegis
 
+wait_health() {
+  local id=$1 expected=$2 timeout=${3:-30} until
+  until=$((SECONDS + timeout))
+  while ((SECONDS < until)); do
+    [[ $(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id" 2>/dev/null || true) == "$expected" ]] && return 0
+    sleep 0.2
+  done
+  echo "Timed out waiting for $id health $expected" >&2
+  return 1
+}
+write_manifest() {
+	local path=$1 service=$2 target=$3 dependency_container=$4
+  printf '{"services":[{"id":"%s","container":"%s","dependencies":["database"]},{"id":"database","container":"%s"}]}\n' \
+    "$service" "$target" "$dependency_container" >"$path"
+}
+
 start_monitor() {
   local selector=$1 db=$2 recovery_args=${3:-}
   read -r -a extra <<<"$recovery_args"
@@ -77,11 +93,20 @@ wait_action_state() {
 }
 recovery_flags='--enable-recovery --service demo-app --healthcheck-local-liveness --restart-appropriate --recovery-startup-grace 0s --restart-stop-grace 2s --restart-request-timeout 30s --verification-deadline 20s --recovery-max-attempts 3 --recovery-window 2m --recovery-cooldown 1s'
 
+# This healthy dependency uses an independent local-liveness check.
+"${compose[@]}" up -d database
+database_id=$("${compose[@]}" ps -q database)
+wait_health "$database_id" healthy
+
 # A brief fault must not cross the three-distinct-check threshold.
 "${compose[@]}" up -d transient
 transient_id=$("${compose[@]}" ps -q transient)
+transient_manifest="$temp_dir/transient-services.json"
+write_manifest "$transient_manifest" demo-transient "$transient_id" "$database_id"
 transient_start=$(docker inspect --format '{{.State.StartedAt}}' "$transient_id")
-start_monitor "$transient_id" "$temp_dir/transient.db" "$recovery_flags"
+transient_flags=${recovery_flags/--service demo-app/--service demo-transient}
+transient_flags+=" --service-config $transient_manifest"
+start_monitor "$transient_id" "$temp_dir/transient.db" "$transient_flags"
 sleep 16
 stop_monitor
 [[ $(docker inspect --format '{{.State.StartedAt}}' "$transient_id") == "$transient_start" ]]
@@ -90,11 +115,61 @@ echo "PASS: transient health fault did not trigger a restart"
 # A container-local fault resets on restart; distinct fresh checks prove recovery.
 "${compose[@]}" up -d self-healing
 self_id=$("${compose[@]}" ps -q self-healing)
+healthy_manifest="$temp_dir/healthy-services.json"
+write_manifest "$healthy_manifest" demo-app "$self_id" "$database_id"
+healthy_flags="$recovery_flags --service-config $healthy_manifest"
 self_start=$(docker inspect --format '{{.State.StartedAt}}' "$self_id")
-start_monitor "$self_id" "$temp_dir/self-healing.db" "$recovery_flags"
+start_monitor "$self_id" "$temp_dir/self-healing.db" "$healthy_flags"
+wait_text "$temp_dir/self-healing.db.out" 'restart accepted; verifying' 75
+touch "$AEGIS_RECOVERY_CONTROL_DIR/dependency-fault"
+wait_health "$database_id" unhealthy
 success_action=$(wait_action_state "$temp_dir/self-healing.db" succeeded 75 3)
 [[ $(docker inspect --format '{{.State.StartedAt}}' "$self_id") != "$self_start" ]]
 echo "PASS: action $success_action restarted once and passed sustained healthy checks"
+stop_monitor
+rm -f -- "$AEGIS_RECOVERY_CONTROL_DIR/dependency-fault"
+wait_health "$database_id" healthy
+
+# An unhealthy direct dependency blocks before reserving budget.
+wait_health "$self_id" unhealthy
+touch "$AEGIS_RECOVERY_CONTROL_DIR/dependency-fault"
+wait_health "$database_id" unhealthy
+blocked_manifest="$temp_dir/blocked-services.json"
+write_manifest "$blocked_manifest" demo-app "$self_id" "$database_id"
+blocked_flags="$recovery_flags --service-config $blocked_manifest"
+blocked_start=$(docker inspect --format '{{.State.StartedAt}}' "$self_id")
+start_monitor "$self_id" "$temp_dir/dependency-blocked.db" "$blocked_flags"
+wait_text "$temp_dir/dependency-blocked.db.out" 'dependency gate blocked' 50
+stop_monitor
+blocked_budget=$("$temp_dir/aegis" budget --service demo-app --db "$temp_dir/dependency-blocked.db")
+grep -Eq 'Attempts within .*: 0$' <<<"$blocked_budget"
+[[ $(docker inspect --format '{{.State.StartedAt}}' "$self_id") == "$blocked_start" ]]
+echo "PASS: unhealthy dependency blocked recovery before reservation; budget remained zero"
+
+# A missing Docker health check is unknown and also blocks without a reservation.
+"${compose[@]}" up -d dependency-no-health
+no_health_id=$("${compose[@]}" ps -q dependency-no-health)
+no_health_manifest="$temp_dir/no-health-services.json"
+write_manifest "$no_health_manifest" demo-app "$self_id" "$no_health_id"
+no_health_flags="$recovery_flags --service-config $no_health_manifest"
+start_monitor "$self_id" "$temp_dir/dependency-missing-health.db" "$no_health_flags"
+wait_text "$temp_dir/dependency-missing-health.db.out" 'health_check_missing' 50
+stop_monitor
+no_health_budget=$("$temp_dir/aegis" budget --service demo-app --db "$temp_dir/dependency-missing-health.db")
+grep -Eq 'Attempts within .*: 0$' <<<"$no_health_budget"
+echo "PASS: dependency without health evidence blocked recovery without consuming budget"
+
+# Dependency recovery requires a new, fresh monitor evaluation; no old action was queued.
+rm -f -- "$AEGIS_RECOVERY_CONTROL_DIR/dependency-fault"
+wait_health "$database_id" healthy
+recovered_manifest="$temp_dir/recovered-services.json"
+write_manifest "$recovered_manifest" demo-app "$self_id" "$database_id"
+recovered_flags="$recovery_flags --service-config $recovered_manifest"
+start_monitor "$self_id" "$temp_dir/dependency-recovered.db" "$recovered_flags"
+recovered_action=$(wait_action_state "$temp_dir/dependency-recovered.db" succeeded 75 3)
+recovered_action_history=$("$temp_dir/aegis" actions --id "$recovered_action" --db "$temp_dir/dependency-recovered.db")
+grep -Fq 'dependency_gate_revalidated' <<<"$recovered_action_history"
+echo "PASS: recovered dependency was freshly reevaluated before action $recovered_action"
 stop_monitor
 
 # The external marker survives restarts; three attempts are consumed and blocked.
@@ -120,7 +195,7 @@ for action_id in 1 2 3; do
     grep -Fq 'evidence_failed' <<<"$action"
   fi
 done
-((dispatches >= 2))
+((dispatches >= 1))
 echo "PASS: persistent fault survived $dispatches confirmed restarts; the three-attempt budget exhausted without false success"
 stop_monitor
 

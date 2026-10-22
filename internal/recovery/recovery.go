@@ -9,7 +9,7 @@ import (
 
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/budget"
-	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/evidence"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/dependency"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 	"github.com/containerd/errdefs"
@@ -26,6 +26,8 @@ type Docker interface {
 	Inspect(context.Context, string) (inspection.Result, error)
 	Restart(context.Context, string, time.Duration) error
 }
+
+type CaptureEvidence func(context.Context, string, int64) (string, error)
 
 type Config struct {
 	Enabled, LocalLiveness, RestartAppropriate                       bool
@@ -66,7 +68,7 @@ type Verification struct {
 
 // Consider runs only after an assessment and observation have been durably
 // saved. It reserves once, captures evidence, then revalidates before dispatch.
-func Consider(ctx context.Context, cfg Config, path string, docker Docker, capture *evidence.DockerClient, a assessment.Assessment, result inspection.Result, now time.Time) (*Verification, string, error) {
+func Consider(ctx context.Context, cfg Config, path string, docker Docker, capture CaptureEvidence, a assessment.Assessment, result inspection.Result, now time.Time, manifest *dependency.Manifest, gate *dependency.Report, clock func() time.Time) (*Verification, string, error) {
 	if !cfg.Enabled || !a.Persistent || a.Status != "persistent failure" || a.CollectionErrorCategory != "" || a.Reason == "duplicate_check" {
 		return nil, "", nil
 	}
@@ -85,6 +87,12 @@ func Consider(ctx context.Context, cfg Config, path string, docker Docker, captu
 	if result.RestartPolicy == "" {
 		return nil, "recovery blocked: Docker restart policy is unavailable", nil
 	}
+	if gate != nil && !gate.Passed {
+		return nil, "dependency gate blocked; Action: none — " + gate.Summary(), nil
+	}
+	if capture == nil {
+		return nil, "", errors.New("bounded evidence capture is unavailable")
+	}
 	reserved, err := store.ReserveLocked(ctx, path, store.Proposal{ServiceID: cfg.Service, ContainerID: result.ID, Policy: cfg.Budget}, now)
 	if err != nil {
 		return nil, "", err
@@ -93,10 +101,9 @@ func Consider(ctx context.Context, cfg Config, path string, docker Docker, captu
 		return nil, "recovery blocked: " + reserved.Decision.Reason + ": " + reserved.Decision.Explanation, nil
 	}
 	reservation := reserved.Reservation
-	if captured, captureErr := evidence.CaptureLocked(ctx, path, reservation.ID, capture, evidence.DefaultLimits(), time.Now); captureErr != nil {
-		issue := "capture_failed"
-		if len(captured.Issues) > 0 {
-			issue = captured.Issues[0]
+	if issue, captureErr := capture(ctx, path, reservation.ID); captureErr != nil {
+		if issue == "" {
+			issue = "capture_failed"
 		}
 		if e := store.TransitionRecovery(context.Background(), path, reservation.ID, "planned", "canceled", time.Now(), "evidence_failed", "Bounded diagnostic evidence was not durably published ("+issue+"); no restart was sent and the reserved attempt remains consumed."); e != nil {
 			return nil, "", fmt.Errorf("capture failed (%v), and action cancellation could not be persisted: %w", captureErr, e)
@@ -112,6 +119,28 @@ func Consider(ctx context.Context, cfg Config, path string, docker Docker, captu
 			return nil, "", fmt.Errorf("cannot persist recovery cancellation: %w", err)
 		}
 		return nil, "recovery canceled: target or eligibility changed before dispatch", nil
+	}
+	if manifest != nil && gate != nil {
+		if clock == nil {
+			return nil, "", errors.New("dependency revalidation requires a clock")
+		}
+		currentTarget := dependency.FromResult(cfg.Service, current.Name, current, nil, clock())
+		observations := dependency.Collect(ctx, *manifest, cfg.Service, docker, &currentTarget, clock)
+		revalidatedAt := clock().UTC()
+		refreshed := dependency.Evaluate(*manifest, cfg.Service, observations, gate, revalidatedAt, a.Policy.MaxAge)
+		if !refreshed.Passed {
+			explanation := "Dependency eligibility changed after evidence capture; no restart was sent. " + refreshed.Summary()
+			if len(explanation) > 8000 {
+				explanation = explanation[:8000]
+			}
+			if err = store.TransitionRecovery(context.Background(), path, reservation.ID, "planned", "canceled", clock(), "dependency_gate_closed", explanation); err != nil {
+				return nil, "", fmt.Errorf("cannot persist dependency-gate cancellation: %w", err)
+			}
+			return nil, "recovery canceled: a dependency gate closed before dispatch", nil
+		}
+		if err = store.RecordRecoveryNote(ctx, path, reservation.ID, revalidatedAt, "dependency_gate_revalidated", refreshed.Summary()); err != nil {
+			return nil, "", fmt.Errorf("cannot persist pre-dispatch dependency evidence: %w", err)
+		}
 	}
 	if err = store.TransitionRecovery(ctx, path, reservation.ID, "planned", "dispatching", validatedAt, "dispatching", "The attempt is durably reserved; one bounded restart request will be sent to this exact running container ID."); err != nil {
 		return nil, "", err

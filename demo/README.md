@@ -105,9 +105,11 @@ files, use `bash scripts/smoke-monitor.sh`.
 ## Run the controlled-recovery smoke test
 
 This separate test creates only containers in a unique Compose project and uses
-a private database under `data/`. It exercises a brief fault, one restart followed
-by sustained checks, a persistent external fault that consumes the budget, record
-mode against that same fault, and controller interruption during verification.
+a private database under `data/`. It exercises a brief fault, healthy dependency
+recovery, a dependency failing after dispatch, an unhealthy dependency blocking
+before reservation, missing dependency health evidence, fresh reevaluation after
+dependency recovery, a persistent external fault exhausting the budget, record
+mode against that fault, and controller interruption during verification.
 The test removes only that project's containers and temporary directory on exit.
 
 ```sh
@@ -132,10 +134,15 @@ mkdir -p data/recovery-demo
 mkdir -p "$AEGIS_RECOVERY_CONTROL_DIR"
 chmod 755 "$AEGIS_RECOVERY_CONTROL_DIR"
 docker compose -f demo/recovery.compose.yaml -p aegis-recovery-demo up -d self-healing
+docker compose -f demo/recovery.compose.yaml -p aegis-recovery-demo up -d database
 container_id="$(docker compose -f demo/recovery.compose.yaml -p aegis-recovery-demo ps -q self-healing)"
+database_id="$(docker compose -f demo/recovery.compose.yaml -p aegis-recovery-demo ps -q database)"
+printf '{"services":[{"id":"demo-self-healing","container":"%s","dependencies":["database"]},{"id":"database","container":"%s"}]}\n' \
+  "$container_id" "$database_id" > data/recovery-demo/services.json
 ./bin/aegis monitor --container "$container_id" --interval 200ms --db data/recovery-demo/history.db \
   --enable-recovery --service demo-self-healing \
-  --healthcheck-local-liveness --restart-appropriate
+  --healthcheck-local-liveness --restart-appropriate \
+  --service-config data/recovery-demo/services.json
 ```
 
 After Aegis reports a persistent failure, it should reserve one attempt, capture
@@ -162,6 +169,6 @@ private data directory:
 
 ```sh
 docker compose -f demo/recovery.compose.yaml -p aegis-recovery-demo down --timeout 5 --remove-orphans
-rm -f -- data/recovery-demo/history.db data/recovery-demo/record.db data/recovery-demo-control/fault
+rm -f -- data/recovery-demo/history.db data/recovery-demo/record.db data/recovery-demo/services.json data/recovery-demo/.aegis-monitor.lock data/recovery-demo-control/fault data/recovery-demo-control/dependency-fault
 rmdir -- data/recovery-demo data/recovery-demo-control
 ```

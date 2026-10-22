@@ -17,8 +17,12 @@ import (
 	"time"
 
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/budget"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/dependency"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/evidence"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/ownership"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/recovery"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 	"github.com/moby/moby/client"
 )
@@ -169,6 +173,51 @@ func TestCanceledCollectionDoesNotSaveAnError(t *testing.T) {
 	}
 	if err := waitInterval(ctx, time.Hour); !errors.Is(err, context.Canceled) {
 		t.Fatal("waiting ignored cancellation")
+	}
+}
+
+type dependencyInspectorFunc func(context.Context, string) (inspection.Result, error)
+
+func (f dependencyInspectorFunc) Inspect(ctx context.Context, selector string) (inspection.Result, error) {
+	return f(ctx, selector)
+}
+
+func TestDependencyReportPersistsWithAssessment(t *testing.T) {
+	cfg := config(t)
+	cfg.Recovery = recovery.Config{Enabled: true, Service: "api", LocalLiveness: true, RestartAppropriate: true, Budget: budget.DefaultPolicy(), StartupGrace: recovery.StartupGrace, GracefulStop: recovery.GracefulStop, RequestTimeout: recovery.RequestDeadline, VerificationDeadline: recovery.VerifyDeadline}
+	cfg.ServiceManifest = &dependency.Manifest{Services: []dependency.Service{{ID: "api", Container: "demo", Dependencies: []string{"database"}}, {ID: "database", Container: "db"}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	dependencyResult := observation()
+	dependencyResult.Name, dependencyResult.CheckTime = "db", at
+	dependencyResult.Evidence = inspection.Evidence{Configured: true, StartedAt: at.Add(-time.Hour)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	current := at
+	waits := 0
+	collect := func(context.Context) (inspection.Result, error) { return observation(), nil }
+	inspector := dependencyInspectorFunc(func(_ context.Context, selector string) (inspection.Result, error) {
+		if selector != "db" {
+			t.Fatalf("unexpected dependency selector %q", selector)
+		}
+		return dependencyResult, nil
+	})
+	client, err := evidence.NewDockerClient(client.WithHost("http://localhost"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	wait := func(ctx context.Context, _ time.Duration) error { waits++; cancel(); return ctx.Err() }
+	if err := loopConfigured(ctx, cfg, collect, nil, client, inspector, func() time.Time { return current }, wait, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	history, err := store.AssessmentHistory(context.Background(), cfg.DBPath, cfg.Target, 10)
+	if err != nil || len(history) != 1 || history[0].DependencyGate == nil || !history[0].DependencyGate.Passed || history[0].DependencyGate.Observations[0].ContainerID != id || !history[0].DependencyGate.Observations[0].CheckTime.Equal(at) {
+		t.Fatalf("dependency gate did not survive persistence: %#v %v", history, err)
+	}
+	if waits != 1 {
+		t.Fatal("monitor did not stop cleanly after persisted gate result")
 	}
 }
 

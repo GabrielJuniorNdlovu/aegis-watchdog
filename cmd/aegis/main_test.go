@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -142,6 +144,10 @@ func TestOutputFailure(t *testing.T) {
 
 func TestRecoveryArgumentsAreValidatedBeforeDocker(t *testing.T) {
 	dockerEnv(t, "tcp://invalid.invalid:2375")
+	manifestPath := filepath.Join(t.TempDir(), "services.json")
+	if err := os.WriteFile(manifestPath, []byte(`{"services":[{"id":"orders","container":"target","dependencies":["missing"]}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name  string
 		flags []string
@@ -150,7 +156,7 @@ func TestRecoveryArgumentsAreValidatedBeforeDocker(t *testing.T) {
 		{"no service", []string{"--enable-recovery", "--healthcheck-local-liveness", "--restart-appropriate"}, "recovery requires --service"},
 		{"no local liveness", []string{"--enable-recovery", "--service", "orders", "--restart-appropriate"}, "healthcheck-local-liveness"},
 		{"no restart permission", []string{"--enable-recovery", "--service", "orders", "--healthcheck-local-liveness"}, "restart-appropriate"},
-		{"unimplemented dependency", []string{"--enable-recovery", "--service", "orders", "--healthcheck-local-liveness", "--restart-appropriate", "--dependency", "database"}, "dependency recovery gates are not implemented"},
+		{"unknown dependency reference", []string{"--enable-recovery", "--service", "orders", "--healthcheck-local-liveness", "--restart-appropriate", "--service-config", manifestPath}, `references unknown dependency "missing"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := append([]string{"monitor", "--container", "target"}, tc.flags...)
