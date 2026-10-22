@@ -62,7 +62,19 @@ func Reserve(ctx context.Context, path string, p Proposal, now time.Time) (Reser
 		return ReservationResult{}, err
 	}
 	defer lock.Close()
-	return reserve(ctx, path, p, now.UTC())
+	return reserve(ctx, path, p, now)
+}
+
+// ReserveLocked is used by the monitor while it holds the data-directory owner lock.
+func ReserveLocked(ctx context.Context, path string, p Proposal, now time.Time) (ReservationResult, error) {
+	now = now.UTC()
+	if err := p.validate(now); err != nil {
+		return ReservationResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return ReservationResult{}, err
+	}
+	return reserve(ctx, path, p, now)
 }
 
 // reserve is the database operation under the owner lock. Separate SQLite

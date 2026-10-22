@@ -11,7 +11,7 @@ import (
 )
 
 func TestBudgetReadOnlyLegacyAndUnsupportedSchema(t *testing.T) {
-	for _, version := range []int{1, 2, 3, 7} {
+	for _, version := range []int{1, 2, 3, 8} {
 		t.Run(string(rune('0'+version)), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "legacy.db")
 			db, err := open(path, false)
@@ -32,7 +32,7 @@ func TestBudgetReadOnlyLegacyAndUnsupportedSchema(t *testing.T) {
 				}
 			}
 			if version == 7 {
-				if _, err := db.Exec("PRAGMA user_version=7"); err != nil {
+				if _, err := db.Exec("PRAGMA user_version=8"); err != nil {
 					t.Fatal(err)
 				}
 			}

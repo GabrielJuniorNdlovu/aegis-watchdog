@@ -16,6 +16,20 @@ import (
 // public command to manufacture actions, and the live monitor never calls it.
 // A repeated request returns the original record without collecting again.
 func Capture(ctx context.Context, path string, id int64, docker *DockerClient, p Limits, now func() time.Time) (store.CaptureRecord, error) {
+	lock, err := ownership.Acquire(path)
+	if err != nil {
+		return store.CaptureRecord{}, err
+	}
+	defer lock.Close()
+	return captureLocked(ctx, path, id, docker, p, now)
+}
+
+// CaptureLocked is for the monitor, which already holds the data-directory lock.
+func CaptureLocked(ctx context.Context, path string, id int64, docker *DockerClient, p Limits, now func() time.Time) (store.CaptureRecord, error) {
+	return captureLocked(ctx, path, id, docker, p, now)
+}
+
+func captureLocked(ctx context.Context, path string, id int64, docker *DockerClient, p Limits, now func() time.Time) (store.CaptureRecord, error) {
 	var r store.CaptureRecord
 	if id <= 0 {
 		return r, errors.New("evidence capture requires a positive action ID")
@@ -25,11 +39,7 @@ func Capture(ctx context.Context, path string, id int64, docker *DockerClient, p
 	}
 	ctx, cancel := context.WithTimeout(ctx, p.Deadline)
 	defer cancel()
-	lock, err := ownership.Acquire(path)
-	if err != nil {
-		return r, err
-	}
-	defer lock.Close()
+	var err error
 	if err = ReconcileLocked(ctx, path, now()); err != nil {
 		return r, err
 	}

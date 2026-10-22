@@ -102,11 +102,14 @@ func actionsCommand(ctx context.Context, args []string, at time.Time, stdout, st
 			fmt.Fprintln(&out, "Inspection evidence: none recorded for this transition")
 		}
 	}
+	if s := action.Verification; s != nil {
+		fmt.Fprintf(&out, "\nVerification target: %s\nOld execution: %s\nNew execution: %s\nVerification started: %s\nStartup grace ends: %s\nVerification deadline: %s\n", s.ContainerID, s.OldExecution, s.NewExecution, timestamp(s.StartedAt), timestamp(s.GraceUntil), timestamp(s.Deadline))
+	}
 	if err := appendEvidenceInspection(ctx, *path, id, &out); err != nil {
 		fmt.Fprintln(stderr, "aegis: cannot inspect evidence:", err)
 		return 1
 	}
-	fmt.Fprintln(&out, "Budget accounting: the original reservation still counts within applicable rolling windows. No attempt is refunded. No restart is authorized or executed.")
+	fmt.Fprintln(&out, "Budget accounting: the original reservation still counts within applicable rolling windows. No attempt is refunded. Docker acceptance is not proof of application recovery.")
 	if _, err := io.WriteString(stdout, out.String()); err != nil {
 		fmt.Fprintln(stderr, "aegis: cannot write action inspection output")
 		return 1

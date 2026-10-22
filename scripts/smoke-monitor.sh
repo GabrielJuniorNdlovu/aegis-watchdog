@@ -111,7 +111,7 @@ wait_for_assessment healthy
 for expected in healthy suspect 'persistent failure' recovering; do
   grep -Fxq "Assessment: $expected" <<<"$assessments"
 done
-grep -Fq 'No recovery action is authorized or executed.' <<<"$assessments"
+grep -Fq 'This assessment alone does not authorize or execute a recovery action.' <<<"$assessments"
 [[ $(docker inspect --format '{{.RestartCount}}' "$container_id") == "$restart_count" ]]
 [[ $(docker inspect --format '{{.State.StartedAt}}' "$container_id") == "$execution_start" ]]
 printf 'PASS: healthy -> suspect -> persistent failure -> recovering -> healthy; restart count unchanged (%s)\n' "$restart_count"

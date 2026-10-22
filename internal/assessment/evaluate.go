@@ -10,7 +10,7 @@ import (
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 )
 
-const NoAction = "No recovery action is authorized or executed."
+const NoAction = "This assessment alone does not authorize or execute a recovery action."
 
 type Policy struct {
 	FailureThreshold  int

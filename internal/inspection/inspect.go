@@ -36,14 +36,15 @@ func ValidID(id string) bool {
 // Result contains only metadata safe to display. Docker health is independent
 // of lifecycle; a stopped container may retain an earlier health result.
 type Result struct {
-	TTY         bool
-	Evidence    Evidence
-	Name        string
-	ID          string
-	Lifecycle   string
-	Health      string
-	CheckTime   time.Time
-	Explanation string
+	TTY           bool
+	Evidence      Evidence
+	Name          string
+	ID            string
+	Lifecycle     string
+	RestartPolicy string
+	Health        string
+	CheckTime     time.Time
+	Explanation   string
 }
 
 // Inspect uses the caller's deadline and cancellation for SDK negotiation and
@@ -71,6 +72,12 @@ func Inspect(ctx context.Context, docker *client.Client, selector string) (Resul
 		Name: strings.TrimPrefix(container.Name, "/"), ID: container.ID,
 		Lifecycle: string(state.Status), Health: "unknown", TTY: container.Config.Tty,
 		Explanation: "No Docker health check is configured; application health is unknown.",
+	}
+	if container.HostConfig != nil {
+		result.RestartPolicy = string(container.HostConfig.RestartPolicy.Name)
+		if result.RestartPolicy == "" {
+			result.RestartPolicy = "no"
+		}
 	}
 	check := container.Config.Healthcheck
 	if check != nil && len(check.Test) > 0 && check.Test[0] != "NONE" {

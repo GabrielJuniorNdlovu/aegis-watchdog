@@ -3,7 +3,8 @@
 Aegis inspects one explicitly selected Docker container and can save the result to
 SQLite. It reports lifecycle and application health separately, reads saved
 history without Docker, and monitors one target periodically with deterministic
-health assessments and persisted explanations. It takes no recovery action.
+health assessments and persisted explanations. Monitoring is record-only by default;
+an explicitly opted-in run can restart one unhealthy container under a bounded policy.
 The [project contract](AEGIS_PROJECT_GOAL.md) describes later work, not implemented features.
 
 ## Build and inspect a container
@@ -235,16 +236,15 @@ after it. This conservative rule waits for a newly started check, even if Docker
 still reports a previous aggregate status. History remains available.
 
 Each monitoring result and its assessment commit in one transaction. Persistence
-failure stops monitoring. Every assessment states: "No recovery action is
-authorized or executed." `recovering` describes successful application checks;
-Aegis has taken no action to cause them. One-off `inspect --save` does not run the
-evaluator. See the [evidence design note](docs/health-assessment-design.md).
+failure stops monitoring. An assessment never authorizes an action by itself;
+record-only mode remains read-only. In recovery mode a separate coordinator applies
+the gates documented below. One-off `inspect --save` does not run the evaluator.
+See the [evidence design note](docs/health-assessment-design.md).
 
 ## Inspect recovery budgets and reservations
 
-Feature 5 adds durable reservation and budget logic. Reservation creation is an
-internal operation exercised through temporary-database tests. Live monitoring
-does not create reservations, and no Docker restart operation is connected.
+The durable reservation and budget logic is used by the explicitly opted-in
+recovery coordinator. Record-only monitoring creates no reservations.
 
 Inspect the host journal without Docker:
 
@@ -254,9 +254,7 @@ Inspect the host journal without Docker:
 ```
 
 `orders-api` is an explicit logical service ID, not a Docker container name.
-Existing monitor runs have not registered any logical services. For those
-journals, this command reports no reservations and insufficient history coverage.
-It does not create sample attempts or change the database. The policy flags
+This command reads the saved budget without connecting to Docker. The policy flags
 select the inspection policy; each reservation also displays its saved policy.
 
 The default budget allows three attempts within `(now - 1h, now]` and ends
@@ -553,6 +551,57 @@ print environment variables, health-check commands, check output, full inspectio
 JSON, or raw Docker error bodies. Docker sends the full inspection response to the
 SDK in memory; this is not a filtered Docker endpoint. Container names and IDs
 appear in output, so do not put secrets in names.
+
+## Opt in to controlled recovery
+
+Record-only mode remains the default. Automatic restart requires all four explicit
+flags below: daemon opt-in, a logical service name, a local-liveness declaration,
+and permission that restart is appropriate. The single configured health check
+must represent local liveness; aggregate readiness checks are not suitable.
+
+```sh
+./bin/aegis monitor --container my-app --db data/aegis.db \
+  --enable-recovery --service orders-api \
+  --healthcheck-local-liveness --restart-appropriate
+```
+
+Recovery accepts only Docker restart policy `no` (an omitted Docker value is its
+`no` default). Policies `always`, `on-failure`, and `unless-stopped` are rejected
+because they compete with Aegis. Dependency gates are not implemented; passing
+`--dependency` fails configuration validation before Docker is contacted. The
+demo database and other services are never selected by this single-container
+monitor.
+
+The default policy needs three distinct fresh failed checks, observes a 20-second
+startup grace, allows a 10-second graceful stop within a 30-second request
+deadline, and requires two distinct fresh successful checks within a two-minute
+verification deadline. Evidence freshness and gaps use the assessment policy
+(one minute by default). The rolling budget defaults to three attempts per hour
+with a five-minute cooldown. Each reserved, rejected, failed, or uncertain attempt
+remains consumed.
+
+After persistent failure, Aegis reserves the service budget and commits action
+intent, saves bounded evidence, re-inspects the exact container ID and execution,
+and checks it is still running, unhealthy, and on restart policy `no`. Only then
+does it durably record `dispatching` and issue one Docker restart request. The
+Docker SDK request is not automatically retried. A timeout, cancellation, or
+connection loss is recorded as uncertain and blocks further reservations; the
+request is never blindly repeated. Docker accepting a restart is not success:
+two distinct fresh health checks from the new execution must pass. Success means
+only that the configured Docker checks passed under those rules.
+
+Inspect the durable decision and verification times with:
+
+```sh
+./bin/aegis actions --id 1 --db data/aegis.db
+```
+
+An operator action and a restart request cannot be atomic. Stop Aegis before
+manually manipulating a managed container when you need a strict operational
+boundary. Record mode is a behavior restriction, not a Docker socket security
+boundary. Uncertain actions require operator acknowledgment using
+`aegis actions acknowledge`; acknowledgment preserves history and budget use and
+does not prove success.
 
 Docker socket access is privileged. Read-only inspection is a restriction in this
 program's behavior, not a security sandbox or a restriction on socket permissions.
