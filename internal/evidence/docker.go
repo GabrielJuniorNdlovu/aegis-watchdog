@@ -1,10 +1,13 @@
 package evidence
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 	"github.com/moby/moby/client"
 )
 
@@ -26,6 +29,21 @@ func NewDockerClient(options ...client.Opt) (*DockerClient, error) {
 	return &DockerClient{sdk}, nil
 }
 func (d *DockerClient) Close() error { return d.sdk.Close() }
+
+func (d *DockerClient) Inspect(ctx context.Context, id string) (inspection.Result, error) {
+	return inspection.Inspect(ctx, d.sdk, id)
+}
+
+// Restart sends one Docker restart request. The caller persists dispatching
+// before invoking it; Moby's SDK issues one POST and does not retry it.
+func (d *DockerClient) Restart(ctx context.Context, id string, graceful time.Duration) error {
+	if !inspection.ValidID(id) || graceful < 0 || graceful > 2*time.Minute {
+		return errors.New("invalid bounded restart request")
+	}
+	seconds := int(graceful.Round(time.Second) / time.Second)
+	_, err := d.sdk.ContainerRestart(ctx, id, client.ContainerRestartOptions{Timeout: &seconds})
+	return err
+}
 
 type responseBody struct {
 	io.ReadCloser

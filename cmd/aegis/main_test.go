@@ -139,3 +139,25 @@ func TestOutputFailure(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q", code, errOut.String())
 	}
 }
+
+func TestRecoveryArgumentsAreValidatedBeforeDocker(t *testing.T) {
+	dockerEnv(t, "tcp://invalid.invalid:2375")
+	for _, tc := range []struct {
+		name  string
+		flags []string
+		want  string
+	}{
+		{"no service", []string{"--enable-recovery", "--healthcheck-local-liveness", "--restart-appropriate"}, "recovery requires --service"},
+		{"no local liveness", []string{"--enable-recovery", "--service", "orders", "--restart-appropriate"}, "healthcheck-local-liveness"},
+		{"no restart permission", []string{"--enable-recovery", "--service", "orders", "--healthcheck-local-liveness"}, "restart-appropriate"},
+		{"unimplemented dependency", []string{"--enable-recovery", "--service", "orders", "--healthcheck-local-liveness", "--restart-appropriate", "--dependency", "database"}, "dependency recovery gates are not implemented"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"monitor", "--container", "target"}, tc.flags...)
+			var stdout, stderr bytes.Buffer
+			if code := run(context.Background(), args, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), tc.want) || stdout.Len() != 0 {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		})
+	}
+}

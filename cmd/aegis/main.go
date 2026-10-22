@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/budget"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/monitor"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/recovery"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 	"github.com/moby/moby/client"
 )
@@ -24,9 +26,10 @@ const usage = "Usage:\n" +
 	"  aegis history --container <full-docker-id> [--limit <1-1000>] [--db <path>]\n" +
 	"  aegis errors --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n" +
 	"  aegis assessments --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n" +
-	"  aegis monitor --container <name-or-id> [--interval <duration>] [--retention <duration>] [--db <path>] [assessment options]\n" +
+	"  aegis monitor --container <name-or-id> [--interval <duration>] [--retention <duration>] [--db <path>] [assessment options] [recovery options]\n" +
 	budgetUsage + actionsUsage +
-	"Assessment options: --failure-threshold 3 --recovery-threshold 2 --max-evidence-age 1m --max-check-gap 1m\n"
+	"Assessment options: --failure-threshold 3 --recovery-threshold 2 --max-evidence-age 1m --max-check-gap 1m\n" +
+	"Recovery options (all required): --enable-recovery --service <logical-id> --healthcheck-local-liveness --restart-appropriate\n"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -59,6 +62,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	interval := monitor.DefaultInterval
 	retention := monitor.DefaultRetention
 	policy := assessment.DefaultPolicy()
+	recoveryEnabled, localLiveness, restartAppropriate := false, false, false
+	service := ""
+	dependency := ""
+	budgetPolicy := budget.DefaultPolicy()
+	startupGrace, stopGrace, requestTimeout, verificationDeadline := recovery.StartupGrace, recovery.GracefulStop, recovery.RequestDeadline, recovery.VerifyDeadline
 	path := flags.String("db", store.DefaultPath, "SQLite file path; used by monitor, history, errors, assessments, or inspect --save")
 	if args[0] == "inspect" {
 		flags.BoolVar(&save, "save", false, "save the successful inspection to SQLite")
@@ -69,6 +77,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		flags.IntVar(&policy.RecoveryThreshold, "recovery-threshold", policy.RecoveryThreshold, "distinct successful checks required after persistent failure")
 		flags.DurationVar(&policy.MaxAge, "max-evidence-age", policy.MaxAge, "maximum age of usable evidence")
 		flags.DurationVar(&policy.MaxGap, "max-check-gap", policy.MaxGap, "maximum gap between completed checks")
+		flags.BoolVar(&recoveryEnabled, "enable-recovery", false, "enable explicitly opted-in bounded container restarts")
+		flags.StringVar(&service, "service", "", "stable logical service identity used for recovery budgets")
+		flags.BoolVar(&localLiveness, "healthcheck-local-liveness", false, "declare Docker health checks as local application liveness")
+		flags.BoolVar(&restartAppropriate, "restart-appropriate", false, "declare that restarting is appropriate for this service")
+		flags.StringVar(&dependency, "dependency", "", "dependency recovery gates are not implemented")
+		flags.IntVar(&budgetPolicy.MaxAttempts, "recovery-max-attempts", budgetPolicy.MaxAttempts, "maximum consumed recovery attempts in the rolling window")
+		flags.DurationVar(&budgetPolicy.Window, "recovery-window", budgetPolicy.Window, "rolling recovery budget window")
+		flags.DurationVar(&budgetPolicy.Cooldown, "recovery-cooldown", budgetPolicy.Cooldown, "minimum time between recovery reservations")
+		flags.DurationVar(&startupGrace, "recovery-startup-grace", startupGrace, "grace after monitor startup before recovery")
+		flags.DurationVar(&stopGrace, "restart-stop-grace", stopGrace, "Docker graceful stop period before SIGKILL")
+		flags.DurationVar(&requestTimeout, "restart-request-timeout", requestTimeout, "overall restart request deadline")
+		flags.DurationVar(&verificationDeadline, "verification-deadline", verificationDeadline, "maximum time allowed to verify sustained recovery")
 	} else {
 		flags.IntVar(&limit, "limit", store.DefaultLimit, "maximum observations to show (1-1000)")
 	}
@@ -112,7 +132,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return history(ctx, *path, selector, limit, stdout, stderr)
 	}
-	config := monitor.Config{Policy: policy, Target: selector, DBPath: *path, Interval: interval, Retention: retention}
+	config := monitor.Config{Policy: policy, Target: selector, DBPath: *path, Interval: interval, Retention: retention,
+		Recovery: recovery.Config{Enabled: recoveryEnabled, Service: service, LocalLiveness: localLiveness, RestartAppropriate: restartAppropriate, Budget: budgetPolicy, StartupGrace: startupGrace, GracefulStop: stopGrace, RequestTimeout: requestTimeout, VerificationDeadline: verificationDeadline}}
+	if dependency != "" {
+		config.Dependencies = []string{dependency}
+	}
 	if args[0] == "monitor" {
 		if err := config.Validate(); err != nil {
 			fmt.Fprintln(stderr, "aegis:", err)

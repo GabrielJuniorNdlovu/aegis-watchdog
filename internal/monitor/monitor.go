@@ -12,6 +12,7 @@ import (
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/evidence"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/recovery"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/store"
 	"github.com/moby/moby/client"
 )
@@ -23,11 +24,13 @@ const (
 )
 
 type Config struct {
-	Policy    assessment.Policy
-	Target    string
-	DBPath    string
-	Interval  time.Duration
-	Retention time.Duration
+	Policy       assessment.Policy
+	Target       string
+	DBPath       string
+	Interval     time.Duration
+	Retention    time.Duration
+	Recovery     recovery.Config
+	Dependencies []string
 }
 
 func (c Config) Validate() error {
@@ -46,6 +49,12 @@ func (c Config) Validate() error {
 	if c.Retention <= 0 {
 		return errors.New("retention must be positive")
 	}
+	if err := c.Recovery.Validate(); err != nil {
+		return err
+	}
+	if len(c.Dependencies) > 0 {
+		return errors.New("dependency recovery gates are not implemented")
+	}
 	return nil
 }
 
@@ -55,16 +64,32 @@ func Run(ctx context.Context, docker *client.Client, config Config, stdout, stde
 		defer cancel()
 		return inspection.Inspect(requestCtx, docker, config.Target)
 	}
-	return loop(ctx, config, collect, func(ctx context.Context, id string) (inspection.Result, error) {
+	var recoveryClient *evidence.DockerClient
+	if config.Recovery.Enabled {
+		var err error
+		recoveryClient, err = evidence.NewDockerClient(client.FromEnv)
+		if err != nil {
+			return fmt.Errorf("create bounded recovery Docker client: %w", err)
+		}
+		defer recoveryClient.Close()
+	}
+	return loopRecovery(ctx, config, collect, func(ctx context.Context, id string) (inspection.Result, error) {
 		return inspection.Inspect(ctx, docker, id)
-	}, time.Now, waitInterval, stdout, stderr)
+	}, recoveryClient, time.Now, waitInterval, stdout, stderr)
 }
 
 // collect, now, and wait are small seams for deterministic scheduling tests.
 // Production waits only after a complete collection/write cycle, never on a ticker.
 func loop(ctx context.Context, config Config, collect func(context.Context) (inspection.Result, error), inspectExact func(context.Context, string) (inspection.Result, error), now func() time.Time, wait func(context.Context, time.Duration) error, stdout, stderr io.Writer) error {
+	return loopRecovery(ctx, config, collect, inspectExact, nil, now, wait, stdout, stderr)
+}
+
+func loopRecovery(ctx context.Context, config Config, collect func(context.Context) (inspection.Result, error), inspectExact func(context.Context, string) (inspection.Result, error), recoveryClient *evidence.DockerClient, now func() time.Time, wait func(context.Context, time.Duration) error, stdout, stderr io.Writer) error {
 	if err := config.Validate(); err != nil {
 		return err
+	}
+	if config.Recovery.Enabled && recoveryClient == nil {
+		return errors.New("recovery enabled without a recovery Docker client")
 	}
 	if ctx.Err() != nil {
 		return nil
@@ -83,6 +108,7 @@ func loop(ctx context.Context, config Config, collect func(context.Context) (ins
 	policy := config.Policy
 	state := assessment.NewState(now(), policy)
 	var lastPrune time.Time
+	var verification *recovery.Verification
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -101,6 +127,32 @@ func loop(ctx context.Context, config Config, collect func(context.Context) (ins
 			return persistenceError(ctx, err)
 		}
 		state = next
+		if verification != nil {
+			message, done, verifyErr := recovery.Verify(ctx, config.DBPath, verification, result, collectionErr, at)
+			if verifyErr != nil {
+				return persistenceError(ctx, fmt.Errorf("persist recovery verification: %w", verifyErr))
+			}
+			if message != "" {
+				if _, err := fmt.Fprintln(stdout, "Recovery:", message); err != nil {
+					return err
+				}
+			}
+			if done {
+				verification = nil
+			}
+		}
+		if verification == nil && config.Recovery.Enabled && collectionErr == nil {
+			var message string
+			verification, message, err = recovery.Consider(ctx, config.Recovery, config.DBPath, recoveryClient, recoveryClient, evaluated, result, at)
+			if err != nil {
+				return persistenceError(ctx, fmt.Errorf("coordinate recovery: %w", err))
+			}
+			if message != "" {
+				if _, err := fmt.Fprintln(stdout, "Recovery:", message); err != nil {
+					return err
+				}
+			}
+		}
 		if collectionErr != nil {
 			category, message := inspection.FailureDetails(collectionErr)
 			if _, err := fmt.Fprintf(stderr, "Collection error at: %s\nTarget: %s\nCategory: %s\nExplanation: %s\n", at.Format(time.RFC3339Nano), config.Target, category, message); err != nil {

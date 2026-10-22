@@ -34,6 +34,79 @@ CREATE TABLE action_audit (
 PRAGMA user_version=5;
 `
 
+const schemaV7 = `
+CREATE TABLE recovery_events (
+ sequence INTEGER PRIMARY KEY,
+ action_id INTEGER NOT NULL REFERENCES reservations(reservation_id),
+ recorded_at TEXT NOT NULL,
+ from_state TEXT NOT NULL,
+ to_state TEXT NOT NULL,
+ reason TEXT NOT NULL,
+ explanation TEXT NOT NULL
+);
+CREATE INDEX recovery_events_action ON recovery_events(action_id, sequence);
+CREATE TABLE recovery_sessions (
+ action_id INTEGER PRIMARY KEY REFERENCES reservations(reservation_id),
+ container_id TEXT NOT NULL,
+ old_execution TEXT NOT NULL,
+ new_execution TEXT NOT NULL,
+ started_at TEXT NOT NULL,
+ deadline TEXT NOT NULL,
+ grace_until TEXT NOT NULL
+);
+PRAGMA user_version=7;
+`
+
+type RecoverySession struct {
+	ContainerID, OldExecution, NewExecution string
+	StartedAt, Deadline, GraceUntil         time.Time
+}
+
+func RecordRecoverySession(ctx context.Context, path string, id int64, s RecoverySession) error {
+	if id <= 0 || !inspection.ValidID(s.ContainerID) || s.OldExecution == "" || s.NewExecution == "" || s.StartedAt.IsZero() || !s.Deadline.After(s.StartedAt) || s.GraceUntil.Before(s.StartedAt) {
+		return errors.New("invalid recovery verification session")
+	}
+	return write(ctx, path, func(ctx context.Context, tx *sql.Tx) error {
+		var state string
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM reservations WHERE reservation_id=?`, id).Scan(&state); err != nil {
+			return err
+		}
+		if state != "dispatching" {
+			return errors.New("recovery action is not dispatching")
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO recovery_sessions(action_id,container_id,old_execution,new_execution,started_at,deadline,grace_until) VALUES (?,?,?,?,?,?,?)`, id, s.ContainerID, s.OldExecution, s.NewExecution, s.StartedAt.UTC().Format(timestampLayout), s.Deadline.UTC().Format(timestampLayout), s.GraceUntil.UTC().Format(timestampLayout))
+		return err
+	})
+}
+
+// TransitionRecovery durably records a lifecycle transition before its caller
+// proceeds to the next external operation.
+func TransitionRecovery(ctx context.Context, path string, id int64, from, to string, at time.Time, reason, explanation string) error {
+	allowed := map[string]map[string]bool{
+		"planned":     {"dispatching": true, "canceled": true},
+		"dispatching": {"verifying": true, "failed": true, "uncertain": true},
+		"verifying":   {"succeeded": true, "failed": true, "uncertain": true},
+	}
+	if id <= 0 || !allowed[from][to] || at.IsZero() || len(reason) > 128 || len(explanation) > 1024 {
+		return errors.New("invalid recovery action transition")
+	}
+	return write(ctx, path, func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE reservations SET state=? WHERE reservation_id=? AND state=?`, to, id, from)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return errors.New("recovery action state changed; inspect the action journal")
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO recovery_events(action_id,recorded_at,from_state,to_state,reason,explanation) VALUES (?,?,?,?,?,?)`, id, at.UTC().Format(timestampLayout), from, to, reason, explanation)
+		return err
+	})
+}
+
 type ActionEvidence struct {
 	ContainerID   string
 	Lifecycle     string

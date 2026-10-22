@@ -21,7 +21,7 @@ const (
 	DefaultPath   = "data/aegis.db"
 	DefaultLimit  = 20
 	MaxLimit      = 1000
-	schemaVersion = 6
+	schemaVersion = 7
 	// Fixed-width UTC text sorts chronologically, including fractional seconds.
 	timestampLayout = "2006-01-02T15:04:05.000000000Z"
 )
@@ -158,6 +158,11 @@ func write(ctx context.Context, path string, operation func(context.Context, *sq
 	if version < 6 {
 		if _, err := tx.ExecContext(ctx, schemaV6); err != nil {
 			return fmt.Errorf("migrate SQLite evidence: %w", err)
+		}
+	}
+	if version < 7 {
+		if _, err := tx.ExecContext(ctx, schemaV7); err != nil {
+			return fmt.Errorf("migrate SQLite recovery events: %w", err)
 		}
 	}
 	if err := operation(ctx, tx); err != nil {
