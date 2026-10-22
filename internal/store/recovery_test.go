@@ -63,3 +63,17 @@ func TestLockedReservationDoesNotAcquireOwnerLockAgainOrDuplicateAttempt(t *test
 		t.Fatal("duplicate reservation", got)
 	}
 }
+
+func TestRecoveryAuditNotePersistsWithoutChangingActionState(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "gate-note.db")
+	r := accept(t, path, proposal(), testTime)
+	at := testTime.Add(time.Second)
+	if err := RecordRecoveryNote(ctx, path, r.ID, at, "dependency_gate_revalidated", "database passed with fresh evidence"); err != nil {
+		t.Fatal(err)
+	}
+	action, err := InspectAction(ctx, path, r.ID)
+	if err != nil || action.Reservation.State != "planned" || len(action.Audit) != 1 || action.Audit[0].FromState != "planned" || action.Audit[0].ToState != "planned" || action.Audit[0].Reason != "dependency_gate_revalidated" || !action.Audit[0].RecordedAt.Equal(at) {
+		t.Fatalf("gate note did not persist independently of action state: %#v %v", action, err)
+	}
+}

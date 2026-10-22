@@ -87,7 +87,7 @@ func TransitionRecovery(ctx context.Context, path string, id int64, from, to str
 		"dispatching": {"verifying": true, "failed": true, "uncertain": true},
 		"verifying":   {"succeeded": true, "failed": true, "uncertain": true},
 	}
-	if id <= 0 || !allowed[from][to] || at.IsZero() || len(reason) > 128 || len(explanation) > 1024 {
+	if id <= 0 || !allowed[from][to] || at.IsZero() || len(reason) > 128 || len(explanation) > 8192 {
 		return errors.New("invalid recovery action transition")
 	}
 	return write(ctx, path, func(ctx context.Context, tx *sql.Tx) error {
@@ -103,6 +103,23 @@ func TransitionRecovery(ctx context.Context, path string, id int64, from, to str
 			return errors.New("recovery action state changed; inspect the action journal")
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO recovery_events(action_id,recorded_at,from_state,to_state,reason,explanation) VALUES (?,?,?,?,?,?)`, id, at.UTC().Format(timestampLayout), from, to, reason, explanation)
+		return err
+	})
+}
+
+func RecordRecoveryNote(ctx context.Context, path string, id int64, at time.Time, reason, explanation string) error {
+	if id <= 0 || at.IsZero() || len(reason) == 0 || len(reason) > 128 || len(explanation) > 8192 {
+		return errors.New("invalid recovery audit note")
+	}
+	return write(ctx, path, func(ctx context.Context, tx *sql.Tx) error {
+		var state string
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM reservations WHERE reservation_id=?`, id).Scan(&state); err != nil {
+			return err
+		}
+		if state != "planned" {
+			return errors.New("recovery action is no longer planned")
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO recovery_events(action_id,recorded_at,from_state,to_state,reason,explanation) VALUES (?,?,?,?,?,?)`, id, at.UTC().Format(timestampLayout), state, state, reason, explanation)
 		return err
 	})
 }

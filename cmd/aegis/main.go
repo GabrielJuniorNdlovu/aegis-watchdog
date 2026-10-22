@@ -14,6 +14,7 @@ import (
 
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/assessment"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/budget"
+	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/dependency"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/inspection"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/monitor"
 	"github.com/GabrielJuniorNdlovu/aegis-watchdog/internal/recovery"
@@ -29,7 +30,7 @@ const usage = "Usage:\n" +
 	"  aegis monitor --container <name-or-id> [--interval <duration>] [--retention <duration>] [--db <path>] [assessment options] [recovery options]\n" +
 	budgetUsage + actionsUsage +
 	"Assessment options: --failure-threshold 3 --recovery-threshold 2 --max-evidence-age 1m --max-check-gap 1m\n" +
-	"Recovery options (all required): --enable-recovery --service <logical-id> --healthcheck-local-liveness --restart-appropriate\n"
+	"Recovery options (all required): --enable-recovery --service <logical-id> --healthcheck-local-liveness --restart-appropriate [--service-config <json-file>]\n"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -64,7 +65,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	policy := assessment.DefaultPolicy()
 	recoveryEnabled, localLiveness, restartAppropriate := false, false, false
 	service := ""
-	dependency := ""
+	serviceConfigPath := ""
 	budgetPolicy := budget.DefaultPolicy()
 	startupGrace, stopGrace, requestTimeout, verificationDeadline := recovery.StartupGrace, recovery.GracefulStop, recovery.RequestDeadline, recovery.VerifyDeadline
 	path := flags.String("db", store.DefaultPath, "SQLite file path; used by monitor, history, errors, assessments, or inspect --save")
@@ -81,7 +82,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		flags.StringVar(&service, "service", "", "stable logical service identity used for recovery budgets")
 		flags.BoolVar(&localLiveness, "healthcheck-local-liveness", false, "declare Docker health checks as local application liveness")
 		flags.BoolVar(&restartAppropriate, "restart-appropriate", false, "declare that restarting is appropriate for this service")
-		flags.StringVar(&dependency, "dependency", "", "dependency recovery gates are not implemented")
+		flags.StringVar(&serviceConfigPath, "service-config", "", "restart-only JSON service manifest with direct dependency gates")
 		flags.IntVar(&budgetPolicy.MaxAttempts, "recovery-max-attempts", budgetPolicy.MaxAttempts, "maximum consumed recovery attempts in the rolling window")
 		flags.DurationVar(&budgetPolicy.Window, "recovery-window", budgetPolicy.Window, "rolling recovery budget window")
 		flags.DurationVar(&budgetPolicy.Cooldown, "recovery-cooldown", budgetPolicy.Cooldown, "minimum time between recovery reservations")
@@ -134,8 +135,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	config := monitor.Config{Policy: policy, Target: selector, DBPath: *path, Interval: interval, Retention: retention,
 		Recovery: recovery.Config{Enabled: recoveryEnabled, Service: service, LocalLiveness: localLiveness, RestartAppropriate: restartAppropriate, Budget: budgetPolicy, StartupGrace: startupGrace, GracefulStop: stopGrace, RequestTimeout: requestTimeout, VerificationDeadline: verificationDeadline}}
-	if dependency != "" {
-		config.Dependencies = []string{dependency}
+	if serviceConfigPath != "" {
+		manifest, err := dependency.Load(serviceConfigPath)
+		if err != nil {
+			fmt.Fprintln(stderr, "aegis:", err)
+			return 2
+		}
+		config.ServiceManifest = &manifest
 	}
 	if args[0] == "monitor" {
 		if err := config.Validate(); err != nil {
