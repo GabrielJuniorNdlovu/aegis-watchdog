@@ -152,3 +152,23 @@ func TestGoldenArtwork(t *testing.T) {
 		}
 	}
 }
+
+func TestOwlArtworkCells(t *testing.T) {
+	for _, a := range []art{owlLarge, owlSmall} {
+		if len(a.classes) != a.height() {
+			t.Fatal("owl glyph and palette row counts differ")
+		}
+		for y, row := range a.glyphs {
+			if utf8.RuneCountInString(row) != a.width() || len(a.classes[y]) != a.width() {
+				t.Fatalf("owl row %d has inconsistent cell widths", y)
+			}
+			for x, glyph := range []rune(row) {
+				if glyph != ' ' {
+					if _, ok := owlPalette[a.classes[y][x]]; !ok {
+						t.Fatalf("owl cell %d,%d has no palette entry", x, y)
+					}
+				}
+			}
+		}
+	}
+}

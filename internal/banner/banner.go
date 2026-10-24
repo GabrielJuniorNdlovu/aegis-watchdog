@@ -57,78 +57,10 @@ type rgb struct {
 var (
 	lavender = rgb{0xA2, 0x7F, 0xE0, 140, 95}
 	gold     = rgb{0xCF, 0x8F, 0x22, 172, 93}
-	edge     = rgb{0xA4, 0x7D, 0xC9, 140, 95} // light purple rim: contrast on dark backgrounds
-	head     = rgb{0x4E, 0x25, 0x5C, 53, 35}
-	body     = rgb{0x66, 0x33, 0x78, 90, 35}
-	wing     = rgb{0x43, 0x1F, 0x50, 53, 35}
-	eye      = rgb{0xF0, 0xA0, 0x4B, 215, 93}
-	iris     = rgb{0xD9, 0x78, 0x2E, 172, 33}
-	pupil    = rgb{0x3A, 0x1A, 0x44, 235, 90}
-	beak     = rgb{0xF0, 0x6A, 0x6E, 203, 91}
 )
 
-var owlPalette = map[byte]rgb{'l': edge, 'h': head, 'b': body, 'w': wing, 'e': eye, 'i': iris, 'p': pupil, 'k': beak}
-
-// In monochrome these classes become blank cells so the eyes and beak remain
-// visible as cut-outs instead of merging into the solid head.
-const monoHollow = "eik"
-
-// art pairs glyph rows with a parallel row of palette classes (one byte per
-// column). Color changes inside the owl fall on cell boundaries, so no cell
-// ever needs a background color.
+// art stores one foreground palette class per terminal cell.
 type art struct{ glyphs, classes []string }
-
-// owlLarge is 20 columns by 11 rows.
-var owlLarge = art{
-	glyphs: []string{
-		"        ▚▗▖▞        ",
-		"     ▄▄▄▄██▄▄▄▄     ",
-		"   ▄████████████▄   ",
-		"  ████████████████  ",
-		" ██████████████████ ",
-		" ██████████████████ ",
-		" ██████████████████ ",
-		"████████████████████",
-		"████████████████████",
-		"████████████████████",
-		" ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ",
-	},
-	classes: []string{
-		"        llll        ",
-		"     llllllllll     ",
-		"   llhhhhhhhhhhll   ",
-		"  lheeeehhhheeeehl  ",
-		" lheippiehheippiehl ",
-		" lhheeeehkkheeeehhl ",
-		" lbhhhhhhhhhhhhhhbl ",
-		"lbbbbhhhhhhhhhhbwwwl",
-		"lbbbbbbbbbbbbbwwwwwl",
-		"lbbbbbbbbbbbbbwwwwwl",
-		" lbbbbbbbbbbbbwwwwl ",
-	},
-}
-
-// owlSmall is 13 columns by 7 rows.
-var owlSmall = art{
-	glyphs: []string{
-		"    ▄▄█▄▄    ",
-		"  ▄███████▄  ",
-		" ███████████ ",
-		" ███████████ ",
-		"█████████████",
-		"█████████████",
-		" ▀▀▀▀▀▀▀▀▀▀▀ ",
-	},
-	classes: []string{
-		"    lllll    ",
-		"  llhhhhhll  ",
-		" leeeeheeeel ",
-		" leppeheppel ",
-		"lheeehkheeehl",
-		"lbbhhhhhhhwwl",
-		" lbbbbbbbbwl ",
-	},
-}
 
 // letters are 9-row block glyphs for the wordmark; '#' is a filled cell.
 var letters = map[byte][]string{
