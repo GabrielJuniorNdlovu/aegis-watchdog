@@ -16,6 +16,16 @@ Engine for inspection. The SQLite driver requires CGO at build time:
 CGO_ENABLED=1 go build -o bin/aegis ./cmd/aegis
 ```
 
+Preview the terminal launch banner without accessing Docker or SQLite:
+
+```sh
+./bin/aegis welcome
+NO_COLOR=1 ./bin/aegis welcome
+./bin/aegis welcome | cat
+```
+
+On an interactive UTF-8 terminal, `aegis welcome` selects a wide side-by-side banner (`>= 76` columns), a compact owl-and-text banner (`37-75` columns), or wrapped text (`< 37` columns), with truecolor (`COLORTERM=truecolor`), 256-color (`TERM=*-256color`), 16-color, `NO_COLOR`, and non-UTF-8/dumb-terminal fallbacks. When stdout is redirected or piped, it prints `Aegis - Container health. Controlled recovery.` without ANSI escape codes. Existing inspection, monitoring, and recovery commands never print the decorative banner.
+
 Supply one container name, full ID, or unambiguous ID prefix:
 
 ```sh
