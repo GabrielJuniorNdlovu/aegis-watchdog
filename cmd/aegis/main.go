@@ -28,18 +28,26 @@ const usage = "Usage:\n" +
 	"  aegis errors --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n" +
 	"  aegis assessments --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]\n" +
 	"  aegis monitor --container <name-or-id> [--interval <duration>] [--retention <duration>] [--db <path>] [assessment options] [recovery options]\n" +
-	budgetUsage + actionsUsage + welcomeUsage +
+	budgetUsage + actionsUsage + welcomeUsage + consoleUsage +
 	"Assessment options: --failure-threshold 3 --recovery-threshold 2 --max-evidence-age 1m --max-check-gap 1m\n" +
 	"Recovery options (all required): --enable-recovery --service <logical-id> --healthcheck-local-liveness --restart-appropriate [--service-config <json-file>]\n"
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	signals := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if len(os.Args) > 1 && os.Args[1] == "console" {
+		// The console handles interrupts per command and at the editable prompt.
+		signals = []os.Signal{syscall.SIGTERM}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), signals...)
 	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
 }
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "console" {
+		return consoleCommand(ctx, args[1:], os.Stdin, stdout, stderr)
+	}
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
 		fmt.Fprint(stdout, usage)
 		return 0

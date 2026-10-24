@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	github.com/containerd/errdefs v1.0.0
+	github.com/ergochat/readline v0.1.3
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/moby/moby/client v0.6.2
 	golang.org/x/sys v0.33.0
@@ -27,4 +28,5 @@ require (
 	go.opentelemetry.io/otel v1.35.0 // indirect
 	go.opentelemetry.io/otel/metric v1.35.0 // indirect
 	go.opentelemetry.io/otel/trace v1.35.0 // indirect
+	golang.org/x/text v0.9.0 // indirect
 )
