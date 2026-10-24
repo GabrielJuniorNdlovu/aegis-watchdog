@@ -69,6 +69,10 @@ type Verification struct {
 // Consider runs only after an assessment and observation have been durably
 // saved. It reserves once, captures evidence, then revalidates before dispatch.
 func Consider(ctx context.Context, cfg Config, path string, docker Docker, capture CaptureEvidence, a assessment.Assessment, result inspection.Result, now time.Time, manifest *dependency.Manifest, gate *dependency.Report, clock func() time.Time) (*Verification, string, error) {
+	currentTime := time.Now
+	if clock != nil {
+		currentTime = clock
+	}
 	if !cfg.Enabled || !a.Persistent || a.Status != "persistent failure" || a.CollectionErrorCategory != "" || a.Reason == "duplicate_check" {
 		return nil, "", nil
 	}
@@ -105,17 +109,17 @@ func Consider(ctx context.Context, cfg Config, path string, docker Docker, captu
 		if issue == "" {
 			issue = "capture_failed"
 		}
-		if e := store.TransitionRecovery(context.Background(), path, reservation.ID, "planned", "canceled", time.Now(), "evidence_failed", "Bounded diagnostic evidence was not durably published ("+issue+"); no restart was sent and the reserved attempt remains consumed."); e != nil {
+		if e := store.TransitionRecovery(context.Background(), path, reservation.ID, "planned", "canceled", currentTime(), "evidence_failed", "Bounded diagnostic evidence was not durably published ("+issue+"); no restart was sent and the reserved attempt remains consumed."); e != nil {
 			return nil, "", fmt.Errorf("capture failed (%v), and action cancellation could not be persisted: %w", captureErr, e)
 		}
 		return nil, "recovery canceled: evidence capture was not durable (" + issue + ")", nil
 	}
-	validatedAt := time.Now().UTC()
+	validatedAt := currentTime().UTC()
 	checkCtx, cancel := context.WithTimeout(ctx, inspection.Timeout)
 	current, inspectErr := docker.Inspect(checkCtx, result.ID)
 	cancel()
 	if inspectErr != nil || current.ID != result.ID || !current.Evidence.StartedAt.Equal(result.Evidence.StartedAt) || current.Lifecycle != "running" || current.Health != "unhealthy" || current.RestartPolicy != "no" || current.CheckTime.IsZero() || validatedAt.Sub(current.CheckTime) > a.Policy.MaxAge || current.CheckTime.Before(a.EvidenceEnd) {
-		if err = store.TransitionRecovery(context.Background(), path, reservation.ID, "planned", "canceled", time.Now(), "pre_dispatch_revalidation_failed", "The exact target or fresh unhealthy evidence changed before dispatch; no restart was sent and the reservation remains consumed."); err != nil {
+		if err = store.TransitionRecovery(context.Background(), path, reservation.ID, "planned", "canceled", currentTime(), "pre_dispatch_revalidation_failed", "The exact target or fresh unhealthy evidence changed before dispatch; no restart was sent and the reservation remains consumed."); err != nil {
 			return nil, "", fmt.Errorf("cannot persist recovery cancellation: %w", err)
 		}
 		return nil, "recovery canceled: target or eligibility changed before dispatch", nil
