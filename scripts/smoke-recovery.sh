@@ -124,8 +124,13 @@ wait_text "$temp_dir/self-healing.db.out" 'restart accepted; verifying' 75
 touch "$AEGIS_RECOVERY_CONTROL_DIR/dependency-fault"
 wait_health "$database_id" unhealthy
 success_action=$(wait_action_state "$temp_dir/self-healing.db" succeeded 75 3)
+success_history=$("$temp_dir/aegis" actions --id "$success_action" --db "$temp_dir/self-healing.db")
+grep -Fq 'Current state: succeeded' <<<"$success_history"
+grep -Eq '^Evidence status: (complete|partial)$' <<<"$success_history"
+grep -Fq 'Published bundle: ' <<<"$success_history"
+[[ -s "$temp_dir/evidence/capture-$success_action.json" ]]
 [[ $(docker inspect --format '{{.State.StartedAt}}' "$self_id") != "$self_start" ]]
-echo "PASS: action $success_action restarted once and passed sustained healthy checks"
+echo "PASS: action $success_action history and published evidence confirm sustained recovery"
 stop_monitor
 rm -f -- "$AEGIS_RECOVERY_CONTROL_DIR/dependency-fault"
 wait_health "$database_id" healthy
