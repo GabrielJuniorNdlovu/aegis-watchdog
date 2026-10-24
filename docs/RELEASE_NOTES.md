@@ -41,6 +41,6 @@ readiness claim.
 ## Validation status
 
 The full milestone is incomplete. See [release-readiness.md](release-readiness.md)
-for checks that passed, checks that remain blocked, and comparison status. Do not
-publish this draft until the real-Docker acceptance path and repeated comparisons
-have run on a recorded host.
+for the recorded Go checks, clean-checkout Docker results, and remaining
+acceptance gaps. Repeated comparison experiments remain outstanding. Do not
+publish this draft until that evidence has been completed and reviewed.

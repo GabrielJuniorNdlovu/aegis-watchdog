@@ -167,6 +167,12 @@ The `.aegis-monitor.lock` file remains; its existence does not mean a monitor is
 running. Do not unlink it while a monitor is active. Read-only history and errors
 commands remain available while monitoring runs.
 
+Use a dedicated data directory for each recovery journal. Evidence files live in
+the sibling `evidence` directory and use action IDs from that journal. Switching
+to another database filename in the same directory can collide with earlier
+evidence and cancel recovery safely. Keep the database and its evidence together;
+use a separate directory for an independent journal.
+
 Retention defaults to seven days (`168h`) and must be positive. After the first
 collection, then at most once per minute after a completed cycle, the monitor
 deletes at most 500 expired rows from each of observations, collection errors,
