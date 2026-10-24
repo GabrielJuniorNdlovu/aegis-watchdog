@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -53,7 +54,11 @@ func consoleWatch(ctx context.Context, args []string, path string, out io.Writer
 			row := rows[0]
 			collected := consoleFreshness(row.CollectedAt, now, row.Policy.MaxAge)
 			health := consoleFreshness(row.EvidenceEnd, now, row.Policy.MaxAge)
-			key = fmt.Sprintf("%s/%s/%s/%s/%s", timestamp(row.EvaluatedAt), row.Status, row.Reason, collected, health)
+			identity, err := json.Marshal(row)
+			if err != nil {
+				return fmt.Errorf("identify stored assessment: %w", err)
+			}
+			key = string(identity) + "/" + collected + "/" + health
 			fmt.Fprintf(&snapshot, "Historical assessment read at: %s\nEvaluated at: %s\nCollected at: %s (age at read: %s; %s)\nDocker ID: %s\nAssessment: %s\nReason: %s\nHealth evidence: %s (age at read: %s; %s; recorded max age: %s)\nExplanation: %s\n", timestamp(now), timestamp(row.EvaluatedAt), timestamp(row.CollectedAt), evidenceAge(row.CollectedAt, now), collected, available(row.ContainerID), row.Status, row.Reason, timestamp(row.EvidenceEnd), evidenceAge(row.EvidenceEnd, now), health, row.Policy.MaxAge, row.Explanation)
 		}
 		if key != last {

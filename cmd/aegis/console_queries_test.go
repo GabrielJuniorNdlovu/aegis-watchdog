@@ -250,3 +250,40 @@ func TestConsoleFreshness(t *testing.T) {
 		}
 	}
 }
+
+type consoleWriteFunc func([]byte) (int, error)
+
+func (f consoleWriteFunc) Write(p []byte) (int, error) { return f(p) }
+
+func TestConsoleWatchReportsReplacementAtSameEvaluationTime(t *testing.T) {
+	path, oldID := consoleFixture(t)
+	rows, err := store.AssessmentHistory(context.Background(), path, "demo", 1)
+	if err != nil || len(rows) != 1 {
+		t.Fatal(rows, err)
+	}
+	next := rows[0]
+	next.ContainerID = strings.Repeat("b", 64)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var out bytes.Buffer
+	replaced := false
+	writer := consoleWriteFunc(func(p []byte) (int, error) {
+		n, err := out.Write(p)
+		if bytes.Contains(p, []byte("Historical assessment read at:")) {
+			if !replaced {
+				replaced = true
+				r := inspection.Result{ID: next.ContainerID, Name: "demo", Lifecycle: "running", Health: "unknown"}
+				if err := store.SaveMonitoringResult(ctx, path, "demo", r, nil, next); err != nil {
+					return n, err
+				}
+			} else if bytes.Contains(p, []byte(next.ContainerID)) {
+				cancel()
+			}
+		}
+		return n, err
+	})
+	err = consoleWatch(ctx, []string{"--container", "demo", "--interval", "200ms"}, path, writer)
+	if !errors.Is(err, context.Canceled) || !strings.Contains(out.String(), oldID) || !strings.Contains(out.String(), next.ContainerID) {
+		t.Fatal("watch missed replacement sharing an evaluation time", err, out.String())
+	}
+}
