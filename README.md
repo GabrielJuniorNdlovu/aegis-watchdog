@@ -438,6 +438,28 @@ Fake Docker endpoints test cancellation, timeouts, missing containers, and daemo
 unavailability without stopping your Docker daemon. A child-process test verifies
 that an abrupt kill releases the data-directory lock.
 
+## Validate a fresh checkout
+
+From a clean clone on a Linux Docker host, run the build, Go checks, and both
+live smoke tests. The smoke tests build temporary binaries and use unique Compose
+projects. They do not depend on `bin/aegis`, a local database, or data from an
+earlier run.
+
+```sh
+CGO_ENABLED=1 go build -o /tmp/aegis ./cmd/aegis
+go test ./...
+go test -race ./...
+go vet ./...
+bash scripts/smoke-inspect.sh
+bash scripts/smoke-recovery.sh
+```
+
+The inspection test checks saved observations in a new process. The recovery
+test opts in only its demo application, injects local faults, and checks action
+history and the published evidence file. Both scripts clean up only the
+containers and temporary data they create. See the [validation status](docs/release-readiness.md)
+for the commit and environment checked for this milestone.
+
 ## Run the monitoring demonstration
 
 ```sh
