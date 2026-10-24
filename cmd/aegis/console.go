@@ -18,8 +18,29 @@ const consoleUsage = "  aegis console [--db <path>]\n"
 
 const consoleHelp = `Console commands:
   /help                 Show this help.
+  /inspect <container> [--save] [--db <path>]
+                        Inspect Docker now; --save explicitly saves an observation.
+  /history --container <full-docker-id> [--limit <1-1000>] [--db <path>]
+                        Read historical observations for the exact Docker ID.
+  /decisions --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]
+                        Read historical assessments and their explanations.
+  /errors --container <requested-name-or-id> [--limit <1-1000>] [--db <path>]
+                        Read historical Docker collection errors.
+  /actions --id <action-id> [--db <path>]
+                        Read one action's audit, verification, and evidence metadata.
+  /evidence <action-id> [--db <path>]
+                        Read evidence metadata and verify the published bundle.
+  /budget --service <logical-id> [budget query options] [--db <path>]
+                        Read budget history; existing one-shot filters also work.
+  /watch --container <requested-name-or-id> [--interval <200ms-1m>] [--db <path>]
+                        Follow the newest stored assessment; default interval 2s.
+  /status [--db <path>]  Show journal location and established console information.
   /exit, /quit          Leave the console.
 
+The launch --db is the default for queries; each command may override it.
+Monitoring, recovery, and acknowledgment are available only through one-shot CLI commands.
+Watch reads SQLite only. Opening the console does not start a controller.
+Evidence displays metadata, not logs. Each command's output is capped at 64 KiB.
 Input supports quotes and backslash escapes; no shell expansion is performed.
 Use arrow keys to edit and recall commands. History lasts only for this session.
 Ctrl+C clears input or cancels a command. Ctrl+D at an empty prompt exits.
@@ -140,7 +161,7 @@ func consoleLine(ctx context.Context, line, path string, out io.Writer) bool {
 		}
 		return true
 	default:
-		fmt.Fprintf(out, "Unknown command %q. Type /help for available commands.\n", args[0])
+		consoleQuery(ctx, args, path, out)
 	}
 	return false
 }
