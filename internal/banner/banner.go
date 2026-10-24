@@ -130,13 +130,13 @@ var owlSmall = art{
 	},
 }
 
-// letters are 7-row block glyphs for the wordmark; '#' is a filled cell.
+// letters are 9-row block glyphs for the wordmark; '#' is a filled cell.
 var letters = map[byte][]string{
-	'A': {" ####### ", "###   ###", "###   ###", "#########", "###   ###", "###   ###", "###   ###"},
-	'E': {"########", "###     ", "###     ", "####### ", "###     ", "###     ", "########"},
-	'G': {" ########", "###      ", "###      ", "###  ####", "###   ###", "###   ###", " ########"},
-	'I': {"#######", "  ###  ", "  ###  ", "  ###  ", "  ###  ", "  ###  ", "#######"},
-	'S': {" ########", "###      ", "###      ", " ####### ", "      ###", "      ###", "######## "},
+	'A': {" ####### ", "###   ###", "###   ###", "###   ###", "#########", "###   ###", "###   ###", "###   ###", "###   ###"},
+	'E': {"########", "###     ", "###     ", "###     ", "####### ", "###     ", "###     ", "###     ", "########"},
+	'G': {" ########", "###      ", "###      ", "###      ", "###  ####", "###   ###", "###   ###", "###   ###", " ########"},
+	'I': {"#######", "  ###  ", "  ###  ", "  ###  ", "  ###  ", "  ###  ", "  ###  ", "  ###  ", "#######"},
+	'S': {" ########", "###      ", "###      ", "###      ", " ####### ", "      ###", "      ###", "      ###", "######## "},
 }
 
 const (
@@ -218,7 +218,7 @@ func wordmark() canvas {
 		}
 		width += len(letters[word[i]][0])
 	}
-	const rows = 7
+	const rows = 9
 	filled := make([][]bool, rows)
 	for y := range filled {
 		filled[y] = make([]bool, width)
@@ -298,11 +298,12 @@ func Render(opts Options) string {
 	switch Choose(opts) {
 	case Wide:
 		owl := owlLarge.canvas(mono)
-		c = newCanvas(owlLarge.height(), WideWidth)
+		subtitleY := len(wordmarkArt) + 1
+		c = newCanvas(max(owlLarge.height(), subtitleY+1), WideWidth)
 		c.blit(owl, 0, margin)
 		x := margin + owlLarge.width() + wideGap
-		c.blit(wordmarkArt, 1, x)
-		c.text(Subtitle, len(wordmarkArt)+2, x+1, nil)
+		c.blit(wordmarkArt, 0, x)
+		c.text(Subtitle, subtitleY, x+1, nil)
 	case Compact:
 		owl := owlSmall.canvas(mono)
 		c = newCanvas(owlSmall.height(), CompactWidth)
@@ -323,24 +324,52 @@ func Render(opts Options) string {
 // plain wraps the title and subtitle to the width without decoration.
 func plain(opts Options) string {
 	var b strings.Builder
-	title := word
-	if opts.Color != NoColor {
-		title = sgr(lavender, opts.Color) + word + reset
+	width := opts.Width
+	if width < 1 {
+		width = 80
 	}
-	b.WriteString(title + "\n")
-	line := ""
-	for _, w := range strings.Fields(Subtitle) {
-		if line != "" && opts.Width > 0 && utf8.RuneCountInString(line)+1+utf8.RuneCountInString(w) > opts.Width {
-			b.WriteString(line + "\n")
-			line = ""
+	for _, line := range wrap(word, width) {
+		if opts.Color != NoColor {
+			b.WriteString(sgr(lavender, opts.Color))
 		}
-		if line != "" {
-			line += " "
+		b.WriteString(line)
+		if opts.Color != NoColor {
+			b.WriteString(reset)
 		}
-		line += w
+		b.WriteByte('\n')
 	}
-	b.WriteString(line + "\n")
+	for _, line := range wrap(Subtitle, width) {
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
 	return b.String()
+}
+
+func wrap(s string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	var lines []string
+	var line []rune
+	for _, word := range strings.Fields(s) {
+		chars := []rune(word)
+		if len(line) > 0 && len(line)+1+len(chars) > width {
+			lines = append(lines, string(line))
+			line = nil
+		}
+		for len(chars) > width {
+			lines = append(lines, string(chars[:width]))
+			chars = chars[width:]
+		}
+		if len(line) > 0 {
+			line = append(line, ' ')
+		}
+		line = append(line, chars...)
+	}
+	if len(line) > 0 {
+		lines = append(lines, string(line))
+	}
+	return lines
 }
 
 const reset = "\x1b[0m"

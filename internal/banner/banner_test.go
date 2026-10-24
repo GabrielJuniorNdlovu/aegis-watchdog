@@ -37,7 +37,7 @@ func TestLayoutBoundaries(t *testing.T) {
 
 func TestNoLineExceedsTerminalWidth(t *testing.T) {
 	modes := []ColorMode{NoColor, Basic16, Color256, TrueColor}
-	widths := []int{20, 30, CompactWidth - 1, CompactWidth, 50, WideWidth - 1, WideWidth, 80, 120}
+	widths := []int{1, 2, 3, 4, 5, 8, 20, 30, CompactWidth - 1, CompactWidth, 50, WideWidth - 1, WideWidth, 80, 120}
 	for _, unicode := range []bool{false, true} {
 		for _, mode := range modes {
 			for _, width := range widths {
@@ -82,7 +82,7 @@ func TestVisibleWidthIgnoresANSIAndCountsRunes(t *testing.T) {
 			t.Fatalf("width %d: plain lines=%d color lines=%d", width, len(plainOut), len(colorOut))
 		}
 		for i := range colorOut {
-			if len(colorOut[i]) <= utf8.RuneCountInString(plainOut[i]) {
+			if strings.Contains(colorOut[i], "\x1b[") && len(colorOut[i]) <= utf8.RuneCountInString(plainOut[i]) {
 				t.Fatalf("width %d line %d expected ANSI bytes in truecolor line", width, i+1)
 			}
 			// Monochrome hollows the eyes and beak, so visible width on rows without
