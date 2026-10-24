@@ -26,6 +26,17 @@ NO_COLOR=1 ./bin/aegis welcome
 
 On an interactive UTF-8 terminal, `aegis welcome` selects a wide side-by-side banner (`>= 76` columns), a compact owl-and-text banner (`37-75` columns), or wrapped text (`< 37` columns), with truecolor (`COLORTERM=truecolor`), 256-color (`TERM=*-256color`), 16-color, `NO_COLOR`, and non-UTF-8/dumb-terminal fallbacks. When stdout is redirected or piped, it prints `Aegis - Container health. Controlled recovery.` without ANSI escape codes. Existing inspection, monitoring, and recovery commands never print the decorative banner.
 
+Open a persistent command prompt with the same artwork:
+
+```sh
+./bin/aegis console --db data/aegis.db
+```
+
+Use `/help` to inspect Docker, read recorded history, decisions, actions, evidence,
+and budgets, or follow stored assessments. See [console usage](docs/console.md)
+for commands and cancellation behavior. The console requires interactive stdin
+and stdout; use one-shot commands for pipelines and scripts.
+
 Supply one container name, full ID, or unambiguous ID prefix:
 
 ```sh
