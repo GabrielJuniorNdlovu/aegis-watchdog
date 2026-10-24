@@ -167,6 +167,12 @@ The `.aegis-monitor.lock` file remains; its existence does not mean a monitor is
 running. Do not unlink it while a monitor is active. Read-only history and errors
 commands remain available while monitoring runs.
 
+Use a dedicated data directory for each recovery journal. Evidence files live in
+the sibling `evidence` directory and use action IDs from that journal. Switching
+to another database filename in the same directory can collide with earlier
+evidence and cancel recovery safely. Keep the database and its evidence together;
+use a separate directory for an independent journal.
+
 Retention defaults to seven days (`168h`) and must be positive. After the first
 collection, then at most once per minute after a completed cycle, the monitor
 deletes at most 500 expired rows from each of observations, collection errors,
@@ -437,6 +443,28 @@ Scheduling and retention tests use explicit times and a small wait-function seam
 Fake Docker endpoints test cancellation, timeouts, missing containers, and daemon
 unavailability without stopping your Docker daemon. A child-process test verifies
 that an abrupt kill releases the data-directory lock.
+
+## Validate a fresh checkout
+
+From a clean clone on a Linux Docker host, run the build, Go checks, and both
+live smoke tests. The smoke tests build temporary binaries and use unique Compose
+projects. They do not depend on `bin/aegis`, a local database, or data from an
+earlier run.
+
+```sh
+CGO_ENABLED=1 go build -o /tmp/aegis ./cmd/aegis
+go test ./...
+go test -race ./...
+go vet ./...
+bash scripts/smoke-inspect.sh
+bash scripts/smoke-recovery.sh
+```
+
+The inspection test checks saved observations in a new process. The recovery
+test opts in only its demo application, injects local faults, and checks action
+history and the published evidence file. Both scripts clean up only the
+containers and temporary data they create. See the [validation status](docs/release-readiness.md)
+for the commit and environment checked for this milestone.
 
 ## Run the monitoring demonstration
 
