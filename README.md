@@ -9,12 +9,18 @@ The [project contract](AEGIS_PROJECT_GOAL.md) describes later work, not implemen
 
 ## Build and inspect a container
 
-Install Go 1.27 or newer and a C compiler, such as GCC. Use a local Linux Docker
-Engine for inspection. The SQLite driver requires CGO at build time:
+Install Go 1.27 or newer and a C compiler, such as GCC. Use a local Docker
+Engine, including Docker Desktop, for inspection. The SQLite driver requires
+CGO at build time:
 
 ```sh
 CGO_ENABLED=1 go build -o bin/aegis ./cmd/aegis
 ```
+
+To try Aegis against the isolated healthy, unhealthy, and no-health-check demo,
+follow [the Docker inspection walkthrough](demo/README.md#inspect-docker-health).
+It includes the Docker context setup required by Aegis and removes only its demo
+containers when you finish.
 
 Preview the terminal launch banner without accessing Docker or SQLite:
 
@@ -534,8 +540,8 @@ The shared BusyBox image remains cached. No prune command is used.
 To inspect the demo manually:
 
 ```sh
-docker compose -f demo/compose.yaml -p aegis-inspection-demo up -d
 export DOCKER_HOST="$(docker context inspect --format '{{.Endpoints.docker.Host}}')"
+docker compose -f demo/compose.yaml -p aegis-inspection-demo up -d
 ./bin/aegis inspect --container "$(docker compose -f demo/compose.yaml -p aegis-inspection-demo ps -q healthy)"
 ./bin/aegis inspect --container "$(docker compose -f demo/compose.yaml -p aegis-inspection-demo ps -q unhealthy)"
 ./bin/aegis inspect --container "$(docker compose -f demo/compose.yaml -p aegis-inspection-demo ps -q no-healthcheck)"

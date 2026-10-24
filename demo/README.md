@@ -1,10 +1,47 @@
-# Run the monitoring demo
+# Aegis Docker demos
 
 Run these commands from the repository root. You need Go 1.27, GCC with CGO
-enabled, Docker, and Docker Compose. Docker Desktop must share the project
-directory for the demo bind mount.
+enabled, Docker, and Docker Compose.
+
+## Inspect Docker health
+
+This small demo starts three bounded BusyBox containers with healthy, unhealthy,
+and disabled health checks. It demonstrates how Aegis reads Docker's health
+state; it does not build or run the Aegis application as a container.
+
+Build Aegis, export the endpoint for the currently selected Docker context, and
+start the demo:
+
+```sh
+CGO_ENABLED=1 go build -o bin/aegis ./cmd/aegis
+export DOCKER_HOST="$(docker context inspect --format '{{.Endpoints.docker.Host}}')"
+docker compose -f demo/compose.yaml -p aegis-inspection-demo up -d
+```
+
+Inspect each state:
+
+```sh
+./bin/aegis inspect --container aegis-inspection-demo-healthy-1
+./bin/aegis inspect --container aegis-inspection-demo-unhealthy-1
+./bin/aegis inspect --container aegis-inspection-demo-no-healthcheck-1
+```
+
+Expect `healthy`, `unhealthy`, and `unknown`, respectively. Docker may need a
+few seconds to complete the first health checks. To try the interactive console,
+run `./bin/aegis console --db /tmp/aegis-demo.db` from the shell, then enter
+`/inspect aegis-inspection-demo-healthy-1` at the `aegis>` prompt. Enter `/exit`
+to return to the shell.
+
+Remove only this demo's containers when finished:
+
+```sh
+docker compose -f demo/compose.yaml -p aegis-inspection-demo down --timeout 5 --remove-orphans
+```
 
 ## Start the sandbox and monitor
+
+Docker Desktop must be configured to share the project directory for the
+monitoring demo's bind mount.
 
 In your first terminal:
 
